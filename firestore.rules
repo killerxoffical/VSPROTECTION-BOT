@@ -1,36 +1,69 @@
 rules_version = '2';
 
-// VS Protection Bot — vsprotection1 Firestore rules
-// Server (worker.js) Admin SDK diye chole — rules server ke atkay na.
-// Panel (group-manager.html ba admin) browser theke Firestore use korle ei rules lagbe.
+// VS Protection Bot — vsprotection1 Firestore rules (multi-tenant)
+// Prottek user shudhu NIJER claimed group dekhbe/manage korbe.
+// Group claim: group er vitore admin /claim CODE likhle (bot Admin SDK diye ownerUid bosay).
+// Panel login: Google / Email (Firebase Authentication).
 // Publish: Firebase Console > vsprotection1 > Firestore Database > Rules > paste > Publish
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // group registry + per-group settings (panel read/write)
-    match /tg_groups/{groupId} {
-      allow read, write: if true;
+    function signedIn() {
+      return request.auth != null;
     }
-    // global welcome/triggers defaults
+    // Super admin email — NIJER email bosan (sob group + sob user dekhbe)
+    function superAdmin() {
+      return signedIn() && request.auth.token.email == 'admin@gmail.com';
+    }
+
+    // panel users (claim code soho)
+    match /vs_users/{uid} {
+      allow read: if superAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if superAdmin() || (signedIn() && request.auth.uid == uid);
+      allow delete: if superAdmin();
+    }
+
+    // groups: owner shudhu nijer ta pore/likhe. create shudhu bot (Admin SDK).
+    match /tg_groups/{gid} {
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if false;
+      allow update: if superAdmin() || (signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && (request.resource.data.ownerUid == resource.data.ownerUid
+            || request.resource.data.ownerUid == null));
+      allow delete: if superAdmin();
+    }
+
+    // global welcome/settings: sob login user pore, super admin likhe
     match /tg_config/{docId} {
-      allow read, write: if true;
+      allow read: if signedIn();
+      allow write: if superAdmin();
     }
-    // warn counter
+
+    // warns: owner shudhu nijer group er ta (ownerUid denormalized, bot likhe)
     match /tg_warns/{wId} {
-      allow read, write: if true;
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create, update, delete: if false;
     }
-    // scammer registry
+
+    // scammer registry: global — sob login user dekhbe, change shudhu bot/super
     match /tg_scammers/{userId} {
-      allow read, write: if true;
+      allow read: if signedIn();
+      allow write: if superAdmin();
     }
-    // name-change history
+
+    // name-change history: sob login user dekhbe (global log), likhbe shudhu bot
     match /tg_user_history/{userId} {
-      allow read, write: if true;
+      allow read: if signedIn();
+      allow create, update, delete: if false;
     }
-    // giveaways
+
+    // giveaways: owner shudhu nijer group er ta (ownerUid denormalized, bot likhe)
     match /giveaways/{gwId} {
-      allow read, write: if true;
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create, update, delete: if false;
     }
 
     // default deny everything else

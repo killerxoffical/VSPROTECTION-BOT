@@ -64,3 +64,34 @@ Database: **vsprotection1** (Firestore). Service: alada Render web service.
 - PP MOD er `worker.js`/database er sathe er **kono somporko nei** — alada deploy, alada bill, alada restart
 - Token kokhono GitHub public repo / screenshot e diben na
 - Free Render ghoome gele prothom message e 30-50s lagte pare (normal)
+
+## I. Admin Panel (panel.html) — sobar group alada
+
+`panel.html` e splash + Google/Email login + dashboard. Prottek user shudhu **nijer claimed group** dekhbe.
+
+### I-1. Authentication ON koro (1 bar)
+1. vsprotection1 → left menu **Authentication** → **Get started** (na thakle)
+2. **Sign-in method** tab:
+   - **Google** → Enable → Save
+   - **Email/Password** → Enable → Save
+3. **Settings** tab → **Authorized domains** → panel jekhane host korbe sei domain **Add domain** (jemon `tumar-site.netlify.app`; localhost emnitei allowed)
+
+### I-2. Rules re-publish
+`firestore.rules` (notun multi-tenant version) → Firestore > Rules > paste > **Publish**.
+Na korle panel e shudhu login hobe, group asbe na!
+
+### I-3. Panel host koro
+`panel.html` jekono static hosting e dao ( Netlify Drop / GitHub Pages / Vercel — file ta drag-drop korlei hoy).
+⚠️ `file://` diye khulle Google login fail korbe — hosting use koro.
+
+### I-4. Super admin email
+`panel.html` er upore `SUPER_ADMIN_EMAIL = 'admin@gmail.com'` — **nijer Gmail bosao**.
+Super admin: sob group + sob user + welcome + broadcast + giveaway dekhbe.
+Sadharon user: shudhu nijer claimed group + settings + triggers + warns.
+
+### I-5. Group claim flow (user der bolo)
+1. Panel login → dashboard e **Claim Code** (jemon `A7K2P9`) Copy
+2. Nijer group e bot ke **Admin** banao
+3. Group e likho: `/claim A7K2P9`
+4. Bot "link done" bollei group panel e asbe ✅
+5. Panel theke Remove korle bot protection choltei thakbe, shudhu panel theke jabe

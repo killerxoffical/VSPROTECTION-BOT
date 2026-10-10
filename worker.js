@@ -171,8 +171,11 @@ app.post("/api/tg/create-giveaway", async (req, res) => {
     if (!chatId || !title || !itemName) return res.status(400).json({ ok: false, error: "সবগুলো তথ্য পূরণ করুন" });
 
     try {
+        let gOwner = "";
+        try { const gd = await db.collection("tg_groups").doc(chatId.toString()).get(); gOwner = gd.exists ? (gd.data().ownerUid || "") : ""; } catch (e) {}
         const giveawayRef = await db.collection("giveaways").add({
-            chatId,
+            chatId: chatId.toString(),
+            ownerUid: gOwner,
             title,
             itemName,
             amount: amount || "",
@@ -274,11 +277,12 @@ async function getWarnCount(chatId, userId) {
     } catch (e) {}
     return userWarnings.get(`${chatId}:${userId}`) || 0;
 }
-async function setWarnCount(chatId, userId, n) {
+async function setWarnCount(chatId, userId, n, ownerUid) {
     userWarnings.set(`${chatId}:${userId}`, n);
     try {
         await db.collection("tg_warns").doc(`${chatId}:${userId}`).set({
-            chatId, userId, count: n, updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            chatId, userId, count: n, ownerUid: ownerUid || "",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
     } catch (e) {}
 }
@@ -614,8 +618,10 @@ groupBot.on("message", async (msg) => {
                 await groupBot.deleteMessage(chatId, msgId).catch(() => {});
                 const limit = Math.max(2, Number(groupConf.warnLimit) || 5);
                 const action = groupConf.warnAction || "ban";
+                let wOwner = groupConf.ownerUid || "";
+                if (!wOwner) { try { const gd = await db.collection("tg_groups").doc(chatId).get(); wOwner = gd.exists ? (gd.data().ownerUid || "") : ""; } catch (e) {} }
                 const curWarns = (await getWarnCount(chatId, userId)) + 1;
-                await setWarnCount(chatId, userId, curWarns);
+                await setWarnCount(chatId, userId, curWarns, wOwner);
                 const atName = `@${fromUser.username || fromUser.first_name}`;
 
                 if (curWarns >= limit) {
@@ -708,6 +714,42 @@ groupBot.on("message", async (msg) => {
             } else {
                 await db.collection("tg_scammers").doc(targetId).delete();
                 await groupBot.sendMessage(chatId, `✅ <a href="tg://user?id=${targetId}">${targetName}</a>-কে স্ক্যামার লিস্ট থেকে মুক্ত করা হলো।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+            }
+            return;
+        }
+
+        // /claim CODE — group ke panel account er sathe link (group admin only)
+        // CODE: panel dashboard e paben. Example: /claim A7K2P9
+        if (text.startsWith("/claim")) {
+            if (!isAdmin) {
+                const w = await groupBot.sendMessage(chatId, `⚠️ এই কমান্ড কেবল গ্রুপ এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                setTimeout(() => groupBot.deleteMessage(chatId, w.message_id).catch(() => {}), 5000);
+                return;
+            }
+            const code = text.replace("/claim", "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+            if (!code) {
+                await groupBot.sendMessage(chatId, `💡 <b>ব্যবহার:</b> <code>/claim CODE</code> — CODE পাবেন admin panel dashboard e।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                return;
+            }
+            try {
+                const uq = await db.collection("vs_users").where("claimCode", "==", code).limit(1).get();
+                if (uq.empty) {
+                    await groupBot.sendMessage(chatId, `❌ ভুল CODE! Panel dashboard থেকে সঠিক CODE নিন।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                    return;
+                }
+                const ownerUid = uq.docs[0].id;
+                const gRef = db.collection("tg_groups").doc(chatId);
+                const gSnap = await gRef.get();
+                const cur = gSnap.exists ? (gSnap.data().ownerUid || "") : "";
+                if (cur && cur !== ownerUid) {
+                    await groupBot.sendMessage(chatId, `⚠️ এই গ্রুপ already claimed! Age panel থেকে Remove/Unclaim করুন।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                    return;
+                }
+                await gRef.set({ ownerUid: ownerUid, claimedAt: admin.firestore.FieldValue.serverTimestamp(), claimedBy: fromUser.id.toString() }, { merge: true });
+                groupConfigs.delete(chatId);
+                await groupBot.sendMessage(chatId, `✅ গ্রুপ link done! এখন panel থেকে manage করতে পারবেন।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+            } catch (e) {
+                await groupBot.sendMessage(chatId, `❌ Claim failed, pore abar try korun।`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
             }
             return;
         }
