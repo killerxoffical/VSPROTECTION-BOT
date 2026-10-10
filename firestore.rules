@@ -1,0 +1,41 @@
+rules_version = '2';
+
+// VS Protection Bot — vsprotection1 Firestore rules
+// Server (worker.js) Admin SDK diye chole — rules server ke atkay na.
+// Panel (group-manager.html ba admin) browser theke Firestore use korle ei rules lagbe.
+// Publish: Firebase Console > vsprotection1 > Firestore Database > Rules > paste > Publish
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // group registry + per-group settings (panel read/write)
+    match /tg_groups/{groupId} {
+      allow read, write: if true;
+    }
+    // global welcome/triggers defaults
+    match /tg_config/{docId} {
+      allow read, write: if true;
+    }
+    // warn counter
+    match /tg_warns/{wId} {
+      allow read, write: if true;
+    }
+    // scammer registry
+    match /tg_scammers/{userId} {
+      allow read, write: if true;
+    }
+    // name-change history
+    match /tg_user_history/{userId} {
+      allow read, write: if true;
+    }
+    // giveaways
+    match /giveaways/{gwId} {
+      allow read, write: if true;
+    }
+
+    // default deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
