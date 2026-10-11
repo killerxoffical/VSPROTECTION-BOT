@@ -179,9 +179,9 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Earning FAQ:** group e Telegram ad revenue nei (শুধু 1000+ subs channel)। Sponsor line/auto-DM blast চাইলে বলো — setting বানিয়ে দেব। Bot spam-ad দিলে Telegram ban — tai anti-ads default ON রাখো।
 
 ## U. Fake staff-title decline (2026-10-11)
-- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → offender message **DELETE** + warn নিচে reply thread-এ।
+- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → offender message **THAKE** (delete হয় না) + warn নিচে reply thread-এ disclaimer হিসেবে আসে।
 - Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + notice delete-sec (0 = notice thakbe)। Real admin/channel exempt।
-- Fake-title decline ও **admin DM + gali log**-এ যায় (ke ki bollo, delete holo kina) — Mod-alert DM ON থাকলে। না চাইলে "Offender message o delete" toggle OFF করো।
+- Fake-title decline ও **admin DM + gali log**-এ যায় (ke ki bollo)। Delete চাইলে শুধু "Offender message o delete" toggle ON করো।
 
 ## V. In-bot setup wizard — /panel menu bot-er vitor (2026-10-11)
 - **Link (kon bot-er admin bojhar jonno):** Panel → 🔗 Telegram Link → New Code → bot ke DM e `/link CODE` (one-time) → `/panel`। Panel e status + Unlink।
@@ -208,3 +208,8 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 ## Y. Admin DM + log e matched word (2026-10-11)
 - Gali DM + panel log e এখন **🎯 Matched: "word"** — full message er KON word-এ ধরলো mention সহ।
 - OFF করা word-এর family-ও ছাড় পায় (e.g. "খানকি" OFF → "খানকির পোলা"-তেও ধরবে না; আলাদা "chod" ঠিকই ধরবে)।
+
+## Z. Choto-word precision fix — Iqbal/বালতি safe (2026-10-11)
+- ছোট word এখন শুধু **আলাদা** থাকলে ধরে: ইকবাল/Iqbal, বালক, বালতি, বালিশ, নাবালক, Bokaro, chhakka (ছক্কা), pathshala, chorus, globaler — এগুলোতে আর ভুল warning নেই।
+- আসল গালি আগের মতোই ধরে: "তুই বাল", "মাগির পোলা", "চোদাকে ধর", f.u.c.k, b0k4।
+- Note: জুতা/গরু/ক্ষেত-এর মতো double-meaning word list-এ আছে — দরকার না হলে panel থেকে OFF করে দিও।

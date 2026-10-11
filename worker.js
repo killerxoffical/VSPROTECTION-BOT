@@ -115,6 +115,16 @@ function wordBoundary(textLower, word) {
     if (!w) return false;
     try { return new RegExp("\\b" + escRe(w) + "\\b", "i").test(textLower); } catch (e) { return textLower.includes(w); }
 }
+// Choto Bangla word (বাল/চোদা/চুদি/মাগী — ৪ অক্ষর পর্যন্ত): শুধু আলাদা থাকলে মিলবে,
+// genitive suffix (র/কে/টা/টি/গুলো/দের) সহ চলবে — কিন্তু ইকবাল/বালক/বালতি/বালিশ-এ ধরবে না
+const BN_SEP = "[\\s।,!?;:\"'()\\[\\]{}<>\\-–—/\\\\|@#$%^*+=~`]";
+const BN_SUF = "(?:র(?:া)?|কে|টা|টি|গুলো(?:র|কে)?|দের)";
+function bnWordHit(textLower, word) {
+    const w = (word || "").toLowerCase().trim();
+    if (!w) return false;
+    try { return new RegExp("(?:^|" + BN_SEP + ")" + escRe(w) + "(?:$|" + BN_SEP + "|" + BN_SUF + ")").test(textLower); }
+    catch (e) { return textLower.includes(w); }
+}
 function isInboxText(text) {
     const t = (text || "").toLowerCase();
     if (!t) return false;
@@ -150,18 +160,18 @@ const REAL_BAD_WORDS = [
     "suor", "suyor", "shuor", "shuar", "shuorerbachcha", "shukor",
     "harami", "haramir", "haramjada", "haramjadi", "haramjad", "haramkhor",
     "gandu", "gandur", "gandmara", "gandmarani", "marani",
-    "shala", "shalar", "abaler",
-    "baler", "balchal", "balsal", "baal", "balerbal", "malai", "dimaon",
+    "abaler",
+    "balerbal", "malai", "dimaon",
     "dalal", "batpar", "dhandabaz", "fotka", "fotkabaz", "chotolok", "fokini", "fokinnni",
     "chiter", "chitingbaz", "dhokabaz", "bhondo",
     "luichcha", "luchcha", "bodmaish", "bodmash", "beyadob",
     "shoytan", "shaitan", "shoitan", "soytaner", "iblis", "lanot", "behaya", "beshorom",
     "chamcha", "telbaj", "nimokharam", "bejonma", "jaroj", "munafik",
-    "gadha", "boka", "murkho", "ahammok", "ulluk", "chasha", "khet", "habla",
+    "gadha", "murkho", "ahammok", "ulluk", "chasha", "khet", "habla",
     "chagol", "ramchagol", "goru", "shiyal", "bador",
     "dakat", "dakait", "khuni", "gunda", "mastan",
     "juta", "jhata", "lathkhor", "potita",
-    "hijra", "hizra", "chakka", "malaun", "katua", "barovatari", "barobhatari",
+    "hijra", "hizra", "malaun", "katua", "barovatari", "barobhatari",
     "shudkhor", "ghushkhor", "modkhor", "ganjakhor", "neshakhor", "babakhor",
     "chorer", "marbo", "merefelbo", "khunkorbo",
     // --- Bangla (beshi) ---
@@ -185,7 +195,7 @@ const REAL_BAD_WORDS = [
 ];
 // Choto/dangerous word — শুধু আলাদা word হিসেবে মিলবে
 // (class/unisex/magic/shoe/title/cucumber/branding এ ধরবে না)
-const BOUNDARY_BAD_WORDS = ["mc", "bc", "ass", "sex", "cum", "tit", "hoe", "magi", "randi", "abal", "chor", "churi"];
+const BOUNDARY_BAD_WORDS = ["mc", "bc", "ass", "sex", "cum", "tit", "hoe", "magi", "randi", "abal", "chor", "churi", "baal", "baler", "balsal", "balchal", "boka", "chakka", "shala", "shalar"];
 // Fake staff-title list (name/username e owner-admin-moderator — kintu real admin na)
 // Default + custom দুটোই চলবে (panel থেকে)।
 const DEFAULT_FAKE_TITLES = ["owner", "admin", "administrator", "moderator", "mod", "founder", "ceo", "support", "official", "staff", "manager"];
@@ -251,10 +261,13 @@ function findBadWord(text, conf) {
         while ((i = nText.indexOf(s, i + 1)) !== -1) spans.push([i, i + s.length]);
     });
     const covered = (idx, len) => spans.some(([a, b]) => idx < b && idx + len > a);
+    const isBnShort = (w) => /[\u0980-\u09FF]/.test(w) && String(w).length <= 4;
     const findIn = (list) => {
         for (const bad of (list || [])) {
             const b = String(bad || "").trim();
             if (!b || b.length < 2) continue;
+            // Choto Bangla word — ইকবাল/বালক/বালতি/বালিশ protection
+            if (isBnShort(b)) { if (bnWordHit(t, b)) return b; continue; }
             const nb = normAbuse(b);
             const ii = nText.indexOf(nb);
             if (ii !== -1 && !covered(ii, nb.length)) return b;
@@ -267,6 +280,7 @@ function findBadWord(text, conf) {
         for (const e of getNormBad()) {
             if (!e.norm) continue;
             if (skip && skip.has(e.norm)) continue;
+            if (isBnShort(e.raw)) { if (bnWordHit(t, e.raw)) return e.raw; continue; }
             const ii = nText.indexOf(e.norm);
             if (ii !== -1 && !covered(ii, e.norm.length)) return e.raw;
         }
@@ -1378,7 +1392,7 @@ groupBot.on("my_chat_member", async (msg) => {
                 customTitles: [],
                 fakeTitleMsg: "",
                 fakeTitleDeleteSec: 0,
-                fakeTitleDelete: true,
+                fakeTitleDelete: false,
                 useDefaultBadWords: true,
                 customBadWords: [],
                 filterDeleteSec: 4,
@@ -1994,11 +2008,11 @@ groupBot.on("message", async (msg) => {
                     const dm = await groupBot.sendMessage(chatId, body, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(async () => {
                         return groupBot.sendMessage(chatId, body.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => null);
                     });
-                    if (cfgBool(groupConf, "fakeTitleDelete", true)) await delMsg(chatId, msgId);
+                    if (cfgBool(groupConf, "fakeTitleDelete", false)) await delMsg(chatId, msgId);
                     const ds = cfgNum(groupConf, "fakeTitleDeleteSec", 0, 0, 300);
                     if (dm) autoDel(chatId, dm.message_id, ds);
                     // Fake-title DM + log — admin jante pare ke ki bollo, delete holo kina
-                    const fdel = cfgBool(groupConf, "fakeTitleDelete", true);
+                    const fdel = cfgBool(groupConf, "fakeTitleDelete", false);
                     try {
                         if (cfgBool(groupConf, "galiDmOn", true)) {
                             const short = String(text || "").slice(0, 300);
