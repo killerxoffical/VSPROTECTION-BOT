@@ -626,6 +626,32 @@ const BOT_ID = (BOTMETA && BOTMETA.id) || "default";
 const BOT_UN = (BOTMETA && BOTMETA.username) || "";
 const BOT_OWNER = (BOTMETA && BOTMETA.ownerUid) || "";
 
+// Rights-error detector + visible admin hint (silent fail আর না —
+// bot Admin/permission ছাড়া add হলে group এই বলে দেবে, 6 ঘণ্টায় ১ বার)।
+const rightsHintAt = new Map();
+function isRightsError(e) {
+    const m = String((e && e.message) || e || "").toLowerCase();
+    if (m.includes("message to delete not found") || m.includes("message can't be deleted")) return false;
+    return /not enough rights|need administrator|not an administrator|bot is not|have to be administrator|was kicked|was blocked|forbidden/.test(m);
+}
+async function hintNoRights(chatId, e) {
+    if (!isRightsError(e)) return;
+    try {
+        const now = Date.now();
+        if (now - (rightsHintAt.get(String(chatId)) || 0) < 6 * 60 * 60 * 1000) return;
+        rightsHintAt.set(String(chatId), now);
+        if (rightsHintAt.size > 500) rightsHintAt.clear();
+        console.error("[RIGHTS] bot needs admin in", chatId, "-", String((e && e.message) || e).slice(0, 120));
+        await groupBot.sendMessage(chatId,
+            `⚠️ <b>VS Protection কাজ করতে পারছে না!</b>\n\nআমাকে group এ <b>Admin</b> বানাও আর এই permission গুলো দাও:\n✅ Delete messages\n✅ Ban users\n✅ Pin messages\n\nতারপর আবার test করো (normal member ID দিয়ে — admin দের bot ধরে না)।`,
+            { parse_mode: "HTML" }).catch(() => {});
+    } catch (e2) {}
+}
+async function delMsg(chatId, msgId) {
+    try { await groupBot.deleteMessage(chatId, msgId); }
+    catch (e) { hintNoRights(chatId, e); }
+}
+
 // গ্রুপে বট অ্যাড হলেই স্বয়ংক্রিয় রেজিস্টার (default protection ON)
 groupBot.on("my_chat_member", async (msg) => {
     try {
@@ -1028,14 +1054,14 @@ groupBot.on("message", async (msg) => {
             if (floodMap.size > 4000) floodMap.clear();
             if (farr.length > fLim) {
                 floodMap.set(fk, []);
-                await groupBot.deleteMessage(chatId, msgId).catch(() => {});
+                await delMsg(chatId, msgId);
                 if (farr.length > fMuteAt) {
                     try {
                         await groupBot.restrictChatMember(chatId, fromUser.id, {
                             permissions: { can_send_messages: false },
                             until_date: Math.floor(Date.now() / 1000) + fMuteMin * 60
                         });
-                    } catch (e) {}
+                    } catch (e) { hintNoRights(chatId, e); }
                 }
                 const flMsg = `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${cfgStr(groupConf, "floodMsg", CFG_DEFAULTS.floodMsg)}`;
                 const fm = await groupBot.sendMessage(chatId, flMsg, { parse_mode: "HTML" }).catch(() => null);
@@ -1075,28 +1101,28 @@ groupBot.on("message", async (msg) => {
                     }
                 } catch (e) {}
                 if (ownChannel) return;
-                await groupBot.deleteMessage(chatId, msgId).catch(() => {});
+                await delMsg(chatId, msgId);
                 const fwdMsg = (groupConf.msgs && groupConf.msgs.forward) || "অন্য কোনো চ্যানেল, গ্রুপ বা ইনবক্স থেকে শেয়ার বা ফরোয়ার্ড করা সম্পূর্ণ নিষেধ!";
-                const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${fwdMsg}`, { parse_mode: "HTML" });
-                autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
+                const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${fwdMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
+                if (m) autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                 return;
             }
 
             // ২. ভিডিও ব্লক
             if (groupConf.antiVideo && (msg.video || msg.video_note)) {
-                await groupBot.deleteMessage(chatId, msgId).catch(() => {});
+                await delMsg(chatId, msgId);
                 const vidMsg = (groupConf.msgs && groupConf.msgs.video) || "গ্রুপে ভিডিও পাঠানো নিষেধ!";
-                const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${vidMsg}`, { parse_mode: "HTML" });
-                autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
+                const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${vidMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
+                if (m) autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                 return;
             }
 
             // ৩. ইনবক্স ফিল্টার (FIX: "ib" ekhon word-boundary — vibe/job e match korbe na)
             if (groupConf.antiInbox !== false && text && isInboxText(text)) {
-                await groupBot.deleteMessage(chatId, msgId).catch(() => {});
+                await delMsg(chatId, msgId);
                 const ibMsg = (groupConf.msgs && groupConf.msgs.inbox) || "গ্রুপে ইনবক্সে ডাকার চেষ্টা করবেন না! সব কথা গ্রুপেই বলুন।";
-                const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${ibMsg}`, { parse_mode: "HTML" });
-                autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
+                const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${ibMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
+                if (m) autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                 return;
             }
 
@@ -1107,10 +1133,10 @@ groupBot.on("message", async (msg) => {
                     : [];
                 const allowed = wl.length > 0 && wl.some((w) => w && text.toLowerCase().includes(String(w).toLowerCase()));
                 if (!allowed) {
-                    await groupBot.deleteMessage(chatId, msgId).catch(() => {});
+                    await delMsg(chatId, msgId);
                     const linkMsg = (groupConf.msgs && groupConf.msgs.link) || "অননুমোদিত লিংক দেওয়া নিষেধ!";
-                    const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${linkMsg}`, { parse_mode: "HTML" });
-                    autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
+                    const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${linkMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
+                    if (m) autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                     return;
                 }
             }
@@ -1119,7 +1145,7 @@ groupBot.on("message", async (msg) => {
             const hasBadWord = containsBadWord(text);
 
             if (hasBadWord) {
-                await groupBot.deleteMessage(chatId, msgId).catch(() => {});
+                await delMsg(chatId, msgId);
                 const limit = Math.max(2, Number(groupConf.warnLimit) || 5);
                 const action = groupConf.warnAction || "ban";
                 let wOwner = await getFreshOwner(chatId, groupConf);
@@ -1132,12 +1158,12 @@ groupBot.on("message", async (msg) => {
                         const until = Math.floor(Date.now() / 1000) + 3600;
                         await groupBot.restrictChatMember(chatId, userId, {
                             permissions: { can_send_messages: false }, until_date: until
-                        }).catch(() => {});
+                        }).catch((e) => { hintNoRights(chatId, e); });
                         await groupBot.sendMessage(chatId, `🔇 <b>${atName}</b>-কে <b>১ ঘণ্টার জন্য মিউট</b> করা হলো! (গালি: ${curWarns}/${limit})`, { parse_mode: "HTML" });
                     } else if (action === "warn") {
                         await groupBot.sendMessage(chatId, `🚨 <b>${atName}</b>, <b>শেষ ওয়ার্নিং (${curWarns}/${limit})!</b> ${groupConf.warnMsg || "এরপর কঠোর ব্যবস্থা নেওয়া হবে!"}`, { parse_mode: "HTML" });
                     } else {
-                        await groupBot.banChatMember(chatId, userId).catch(() => {});
+                        await groupBot.banChatMember(chatId, userId).catch((e) => { hintNoRights(chatId, e); });
                         await groupBot.sendMessage(chatId, `🚨 <a href="tg://user?id=${userId}">${currentName}</a>-কে <b>গ্রুপ থেকে ব্যান</b> করা হলো! (গালি: ${curWarns}/${limit})`, { parse_mode: "HTML" });
                     }
                     await clearWarn(chatId, userId);

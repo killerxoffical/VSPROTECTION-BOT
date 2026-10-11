@@ -115,7 +115,7 @@ Sadharon user: shudhu nijer claimed group + settings + triggers + warns.
 - Backward compatible: purono group e notun field na thakle default (age jemon cholto temon) cholbe.
 
 ## L. v4.0 Developer Portal — My Applications + multi-bot (2026-10-11)
-- **Login er por Dashboard = My Applications** (image er moto dark cards): Shared Bot + nijer connected bots + sobar pase **+ card**.
+- **Login er por Dashboard = My Applications** (image er moto cards): Shared Bot + nijer connected bots + sobar pase **+ card**.
 - **+ tap → popup:** login email (auto) + bot display name + BotFather token → **Verify & Connect** (`POST /api/tg/verify-bot` check kore, `vs_bots` e save). Worker live pickup kore polling start kore.
 - **Bot e tap → oi bot er groups.** Group e tap → **fullscreen premium panel**: bam pashe feature rail (Filters/Flood/Gali/Messages/Welcome/Scammer/Trackers/Triggers/Members/Warns/Send/Manage), majhkhane selected feature — sob customize ager motoi.
 - **Nijer bot = claim lage na:** bot ke group e add + Admin banalei group auto-link hoye oi bot er niche asbe. Shared bot e ager claim system thakbei.
@@ -124,3 +124,24 @@ Sadharon user: shudhu nijer claimed group + settings + triggers + warns.
   1. `firestore.rules` e **`vs_bots`** block notun — re-publish must!
   2. User bot er token server e polling chalabe — Render **1 instance** rakho; token revoke hole panel theke bot delete + reconnect.
 - ⚠️ Token Firestore e owner-only readable — repo/hosting e token post koro na.
+
+## M. v4.1 Light console + 1-step Server setup (2026-10-11)
+- **Full light mode:** sidebar, dashboard, bot cards, group cards, fullscreen panel, popup — sob white/light.
+- **Server URL jhamela sesh:**
+  1. **Render dashboard** → service → URL copy (jemon `https://vs-bot.onrender.com`)
+  2. Panel **Dashboard → 🔌 Step 1 box** e paste → **✅ Test & Save** → Online = done. URL phone/browser e **auto-save**, ar dite hobe na.
+  3. (Optional, sobar jonno permanent) `panel.html` er upore `DEFAULT_API_BASE = 'https://...'` bosiye host korle karo kichu dite hobe na.
+  4. Panel + server same domain e host hole **auto-detect** hoye jay.
+- Offline thakle banner + top chip nijei bole dibe ki korte hobe. Help Center eo "Server URL kothay dibe" guide ache.
+
+## N. Bot add hoy kintu kichu kore na? (2026-10-11)
+Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle niche 5 ta check koro:
+
+1. **Bot ke ADMIN banao + 3 permission:** group → bot er naam e tap → Promote to admin → ✅ Delete messages, ✅ Ban users, ✅ Pin messages. Permission na thakle bot ekhon group Ei likhe janiye dey ("VS Protection kaj korte parche na!").
+2. **Nijer admin ID diye test koro NA:** admin der bot ichcha kore ignore kore (filter admin der dhore na). Test koro **normal member** ID diye — link/gali pathao.
+3. **Group e `/id` likho:** reply asle = bot LIVE. Reply na asle bot cholchei na → Render Logs dekho:
+   - `[FATAL] ... TOKEN` = token env vul; `[FATAL] FIREBASE...` = service JSON vul;
+   - `[POLLING 409]` = 2 jayga theke cholche (Render + local/old deploy) — 1 ta rakho;
+   - Free Render sleep = prothom reply te 30-50s lag normal.
+4. **Panel button kaj na korle:** Dashboard → **🔍 Diagnostics → Run check**. Server Offline = Step 1 URL; Database "RULES publish koro" = Firestore Rules e firestore.rules paste + Publish; Groups 0 = claim/auto-link + Refresh.
+5. **Vul bot test korcho na to?** Panel e + diye connect kora nijer bot add korle sudhu OI bot kaj korbe — shared bot (@Vareonprotection_bot) add korle claim CODE lage.
