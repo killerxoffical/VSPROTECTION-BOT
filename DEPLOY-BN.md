@@ -179,6 +179,16 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Earning FAQ:** group e Telegram ad revenue nei (শুধু 1000+ subs channel)। Sponsor line/auto-DM blast চাইলে বলো — setting বানিয়ে দেব। Bot spam-ad দিলে Telegram ban — tai anti-ads default ON রাখো।
 
 ## U. Fake staff-title decline (2026-10-11)
-- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → message decline (delete + custom warn)।
-- Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + delete-sec (0 = notice kokhono delete hobe na, thakbe)। Real admin/channel exempt।
-- Offender message by default THAKE (delete হয় না) + warn নিচে reply thread-এ আসে। চাইলে "Offender message o delete" toggle ON করো।
+- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → message decline (custom warn, offender message THAKE)।
+- Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + delete-sec (0 = notice kokhono delete hobe na, thakbe)। Real admin/channel exempt। Warn নিচে reply thread-এ আসে। চাইলে "Offender message o delete" toggle ON করো।
+
+## V. In-bot setup wizard — /panel menu bot-er vitor (2026-10-11)
+- **Link (kon bot-er admin bojhar jonno):** Panel → 🔗 Telegram Link → New Code → bot ke DM e `/link CODE` (one-time) → `/panel`। Panel e status + Unlink।
+- **`/panel` (DM):** groups list → group tap → full menu: 🛡️ Filters toggle, ⏱️ Timers (number), 💬 Replies (text), 🎉 Welcome (mode/text/sec), ⚡ Add reply wizard (keyword → reply → delete-sec, 0 = thakbe), 🗑 Triggers delete, 📊 Info। Trigger reply te deleteSec auto-delete।
+- Commands: `/link /unlink /cancel /panel` (DM only)। Button press owner-check সহ।
+
+## W. Gali delete fix + admin DM + panel gali log (2026-10-11)
+- **Root cause:** default list OFF + custom খালি ছিল, তাই কিছুই ধরতো না। Ekhon built-in auto list **default ON** (notun group + toggle) — gali দিলেই **delete + warn** হবে।
+- **Admin DM:** gali + full detail (নাম/ID/group/লেখা/warn) bot DM করে। শর্ত: Trackers tab e admin ID + admin bot e **/start** দেওয়া।
+- **Panel gali log:** Warns tab e "Recent Gali Log" — ke ki bollo bot thekei dekho (Firestore rules re-publish লাগবে: `tg_gali_log`)।
+- Test normal member ID দিয়ে করো (admin der bot dhore na)।

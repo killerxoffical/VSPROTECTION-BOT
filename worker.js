@@ -224,8 +224,8 @@ function leetMap(s) {
 }
 let normBadCache = null;
 // conf.customBadWords (panel থেকে MANUAL list) সবসময় চেক হয়।
-// Built-in list শুধু panel এ "Default list" toggle ON করলে চেক হয় —
-// default OFF, অর্থাৎ auto কিছু নেই, সব manual।
+// Built-in auto list default ON — panel থেকে toggle OFF করলেই শুধু বন্ধ
+// (সম্পূর্ণ manual চাইলে custom list + toggle OFF)।
 function containsBadWord(text, conf) {
     const t = (text || "").toLowerCase();
     if (!t) return false;
@@ -241,7 +241,7 @@ function containsBadWord(text, conf) {
         return false;
     };
     if (checkList(conf && conf.customBadWords)) return true;
-    if (conf && conf.useDefaultBadWords === true) {
+    if (!conf || conf.useDefaultBadWords !== false) {
         if (!normBadCache) normBadCache = REAL_BAD_WORDS.map(normAbuse);
         for (const nb of normBadCache) { if (nb && nText.includes(nb)) return true; }
     }
@@ -781,6 +781,338 @@ async function getFreshOwner(chatId, cachedConf) {
     return "";
 }
 
+// ---------------- 8a2. PANEL-LINK + IN-BOT WIZARD (DM setup) ----------------
+// Panel theke chat-ID connect → bot DM e /panel menu → reply/time sob ekhanei set.
+const wizMap = new Map(); // tgUserId -> { step, groupId, action, data, at }
+const linkCache = new Map(); // tgUserId -> { uid, at }
+function wizGet(uid) {
+    const w = wizMap.get(String(uid));
+    if (!w) return null;
+    if (Date.now() - w.at > 5 * 60 * 1000) { wizMap.delete(String(uid)); return null; }
+    return w;
+}
+async function linkedUid(tgId) {
+    const k = String(tgId);
+    const c = linkCache.get(k);
+    if (c && Date.now() - c.at < 10 * 60 * 1000) return c.uid;
+    try {
+        const q = await db.collection("vs_users").where("telegramId", "==", k).limit(1).get();
+        if (!q.empty) {
+            const uid = q.docs[0].id;
+            linkCache.set(k, { uid, at: Date.now() });
+            return uid;
+        }
+    } catch (e) {}
+    return "";
+}
+async function ownedGroups(uid) {
+    try {
+        const s = await db.collection("tg_groups").where("ownerUid", "==", uid).limit(30).get();
+        const arr = [];
+        s.forEach((d) => arr.push({ id: d.id, ...(d.data() || {}) }));
+        return arr;
+    } catch (e) { return []; }
+}
+// In-bot panel field meta (toggle / number / text)
+const WIZ_TOGGLES = [["antiLink", "🔗 Anti-Link"], ["antiVideo", "🎥 Anti-Video"], ["antiForward", "📤 Anti-Forward"], ["antiInbox", "📥 Anti-Inbox"], ["antiBot", "🤖 Anti-Bot"], ["antiButton", "🔘 Anti-Button"], ["fakeTitleOn", "🎭 Fake-title"], ["floodOn", "🌊 Flood"]];
+const WIZ_NUMBERS = [["filterDeleteSec", "Filter warn delete (sec)", 0, 300, 4], ["warnDeleteSec", "Gali warn delete (sec)", 0, 300, 5], ["trigCooldownSec", "Trigger gap (sec)", 0, 300, 15], ["welcomeDeleteSec", "Welcome delete (sec)", 0, 300, 10], ["floodLimit", "Flood limit", 2, 50, 6], ["warnLimit", "Warn limit", 2, 20, 5]];
+const WIZ_TEXTS = [["warnMsg", "Warn message"], ["floodMsg", "Flood message"], ["welcomeMsg", "Welcome text ({name})"], ["adminGaliMsg", "Admin gali reply ({name})"], ["fakeTitleMsg", "Fake-title decline ({name}/{title}/{id})"], ["scammerMsg", "Scammer alert"], ["msgs.forward", "Forward warn"], ["msgs.video", "Video warn"], ["msgs.inbox", "Inbox warn"], ["msgs.link", "Link warn"], ["msgs.button", "Button-ad warn"]];
+function wizVal(g, key, def) {
+    const v = g ? g[key] : undefined;
+    if (typeof def === "boolean") return v === true || v === "true" || v === 1;
+    if (typeof def === "number") { const n = Number(v); return isFinite(n) ? n : def; }
+    return (v === undefined || v === null) ? "" : String(v);
+}
+function onOff(v) { return v ? "🟢 ON" : "🔴 OFF"; }
+function wizNumMeta(field) { return WIZ_NUMBERS.find((x) => x[0] === field); }
+function wizTextMeta(field) { return WIZ_TEXTS.find((x) => x[0] === field); }
+// Callback নিরাপত্তা: linked owner + nijer group কিনা
+async function wizCheck(bot, q, groupId) {
+    const uid = await linkedUid(q.from.id.toString());
+    if (!uid) {
+        await bot.answerCallbackQuery(q.id, { text: "আগে DM e /link দিয়ে connect করো!", show_alert: true }).catch(() => {});
+        return null;
+    }
+    let gd = null;
+    try { gd = await db.collection("tg_groups").doc(String(groupId)).get(); } catch (e) {}
+    if (!gd || !gd.exists || ((gd.data() || {}).ownerUid || "") !== uid) {
+        await bot.answerCallbackQuery(q.id, { text: "Group পাওয়া যায়নি!", show_alert: true }).catch(() => {});
+        return null;
+    }
+    const g = { id: gd.id, ...(gd.data() || {}) };
+    groupConfigs.set(g.id, gd.data() || {});
+    return { uid, g };
+}
+async function wizEdit(bot, q, text, buttons) {
+    try {
+        await bot.editMessageText(text, {
+            chat_id: q.message.chat.id, message_id: q.message.message_id,
+            parse_mode: "HTML", disable_web_page_preview: true,
+            reply_markup: { inline_keyboard: buttons }
+        });
+    } catch (e) {
+        await bot.sendMessage(q.message.chat.id, text, { parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: buttons } }).catch(() => {});
+    }
+    try { await bot.answerCallbackQuery(q.id); } catch (e) {}
+}
+async function sendGroupMenu(bot, chatId, g) {
+    const t = `📋 <b>${(g.title || g.id || "").slice(0, 60)}</b>\n<code>${g.id}</code>\n\n🛡️ Link:${onOff(g.antiLink !== false)} Forward:${onOff(g.antiForward !== false)}\n🤬 Warn:${Number(g.warnLimit) || 5}→${g.warnAction || "ban"} ⏱️ Gap:${g.trigCooldownSec !== undefined ? g.trigCooldownSec : 15}s\n⚡ Triggers:${(g.triggers || []).length} 🎉 Welcome:${g.welcomeMode || "global"}\n\nSetting বদলাতে tap করো:`;
+    await bot.sendMessage(chatId, t, {
+        parse_mode: "HTML", disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: [
+            [{ text: "🛡️ Filters", callback_data: `wp_f:${g.id}` }, { text: "⏱️ Timers", callback_data: `wp_n:${g.id}` }],
+            [{ text: "💬 Replies", callback_data: `wp_r:${g.id}` }, { text: "🎉 Welcome", callback_data: `wp_w:${g.id}` }],
+            [{ text: "⚡ Add reply", callback_data: `wp_trig:${g.id}` }, { text: "🗑 Triggers", callback_data: `wp_tl:${g.id}` }],
+            [{ text: "📊 Info", callback_data: `wp_i:${g.id}` }, { text: "🔙 Groups", callback_data: `wp_back` }]
+        ]}
+    }).catch(() => {});
+}
+async function wizCallback(bot, q) {
+    const data = q.data || "";
+    const parts = data.split(":");
+    const kind = parts[0];
+    const ack = async (t) => { try { await bot.answerCallbackQuery(q.id, t ? { text: t } : {}); } catch (e) {} };
+    if (kind === "wp_back") {
+        const uid = await linkedUid(q.from.id.toString());
+        if (!uid) { await ack("আগে /link!"); return; }
+        const gs = await ownedGroups(uid);
+        await wizEdit(bot, q, `🏠 <b>তোমার Groups</b>:`, gs.slice(0, 20).map((g) => ([{ text: `📋 ${(g.title || g.id).slice(0, 40)}`, callback_data: `wp_g:${g.id}` }])));
+        return;
+    }
+    const gid = parts[1];
+    if (kind === "wp_g") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        await sendGroupMenu(bot, q.message.chat.id, c.g);
+        await ack();
+        return;
+    }
+    if (kind === "wp_f") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        await wizEdit(bot, q, `🛡️ <b>Filters</b> — tap = ON/OFF:`, [
+            ...WIZ_TOGGLES.map(([f, label]) => ([{ text: `${label} ${onOff(wizVal(c.g, f, f !== "antiVideo"))}`, callback_data: `wp_tgl:${gid}:${f}` }])),
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    if (kind === "wp_tgl") {
+        const field = parts[2];
+        if (!WIZ_TOGGLES.some(([f]) => f === field)) { await ack("Unknown!"); return; }
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        const cur = wizVal(c.g, field, field !== "antiVideo");
+        try { await db.collection("tg_groups").doc(String(gid)).set({ [field]: !cur }, { merge: true }); } catch (e) {}
+        groupConfigs.delete(String(gid));
+        try {
+            const gd = await db.collection("tg_groups").doc(String(gid)).get();
+            const g2 = { id: gd.id, ...(gd.exists ? gd.data() : {}) };
+            groupConfigs.set(g2.id, gd.exists ? gd.data() : {});
+            await wizEdit(bot, q, `🛡️ <b>Filters</b> — tap = ON/OFF:`, [
+                ...WIZ_TOGGLES.map(([f, label]) => ([{ text: `${label} ${onOff(wizVal(g2, f, f !== "antiVideo"))}`, callback_data: `wp_tgl:${gid}:${f}` }])),
+                [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+            ]);
+        } catch (e) { await ack("Saved ✅"); }
+        return;
+    }
+    if (kind === "wp_n") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        await wizEdit(bot, q, `⏱️ <b>Timers</b> (sec) — tap করে নতুন মান পাঠাও:`, [
+            ...WIZ_NUMBERS.map(([f, label]) => ([{ text: `${label}: ${wizVal(c.g, f, 0)}`, callback_data: `wp_ask:${gid}:${f}` }])),
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    if (kind === "wp_r") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        const ms = c.g.msgs || {};
+        const prev = (k) => { const v = k.startsWith("msgs.") ? (ms[k.slice(5)] || "") : (c.g[k] || ""); return String(v).slice(0, 24) || "—"; };
+        await wizEdit(bot, q, `💬 <b>Replies</b> — tap করে নতুন লেখা পাঠাও:`, [
+            ...WIZ_TEXTS.map(([f, label]) => ([{ text: `${label}: ${prev(f)}`, callback_data: `wp_ask:${gid}:${f}` }])),
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    if (kind === "wp_w") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        await wizEdit(bot, q, `🎉 <b>Welcome</b> — mode: <b>${c.g.welcomeMode || "global"}</b>:`, [
+            [{ text: "🔁 Mode বদলাও", callback_data: `wp_wc:${gid}` }],
+            [{ text: "✏️ Text set করো", callback_data: `wp_ask:${gid}:welcomeMsg` }],
+            [{ text: "⏱️ Delete sec", callback_data: `wp_ask:${gid}:welcomeDeleteSec` }],
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    if (kind === "wp_wc") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        const order = ["global", "custom", "off"];
+        const nx = order[(order.indexOf(c.g.welcomeMode || "global") + 1) % order.length];
+        try { await db.collection("tg_groups").doc(String(gid)).set({ welcomeMode: nx }, { merge: true }); } catch (e) {}
+        groupConfigs.delete(String(gid));
+        await ack(`Mode: ${nx}`);
+        const c2 = await wizCheck(bot, q, gid);
+        if (c2) {
+            await wizEdit(bot, q, `🎉 <b>Welcome</b> — mode: <b>${c2.g.welcomeMode || "global"}</b>:`, [
+                [{ text: "🔁 Mode বদলাও", callback_data: `wp_wc:${gid}` }],
+                [{ text: "✏️ Text set করো", callback_data: `wp_ask:${gid}:welcomeMsg` }],
+                [{ text: "⏱️ Delete sec", callback_data: `wp_ask:${gid}:welcomeDeleteSec` }],
+                [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+            ]);
+        }
+        return;
+    }
+    if (kind === "wp_ask") {
+        const field = parts.slice(2).join(":");
+        if (!wizNumMeta(field) && !wizTextMeta(field)) { await ack("Unknown!"); return; }
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        const meta = wizNumMeta(field);
+        const label = meta ? `${meta[1]} (${meta[2]}–${meta[3]})` : (wizTextMeta(field) || [])[1] || field;
+        wizMap.set(q.from.id.toString(), { step: "value", groupId: String(gid), action: "set", field, at: Date.now() });
+        await ack();
+        await bot.sendMessage(q.message.chat.id, `✍️ <b>${label}</b> পাঠাও:\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+        return;
+    }
+    if (kind === "wp_trig") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        wizMap.set(q.from.id.toString(), { step: "kw", groupId: String(gid), action: "trig", data: {}, at: Date.now() });
+        await ack();
+        await bot.sendMessage(q.message.chat.id, `⚡ <b>নতুন auto-reply</b>\n\n1️⃣ Keyword পাঠাও (user যা লিখবে):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+        return;
+    }
+    if (kind === "wp_tl") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        const arr = c.g.triggers || [];
+        await wizEdit(bot, q, `🗑 <b>Triggers</b> (${arr.length}) — ❌ = delete:`, [
+            ...arr.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}`, callback_data: `wp_del:${gid}:${i}` }])),
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    if (kind === "wp_del") {
+        const idx = Number(parts[2]);
+        const c = await wizCheck(bot, q, gid);
+        if (!c || !isFinite(idx)) return;
+        const arr = (c.g.triggers || []).slice();
+        arr.splice(idx, 1);
+        try { await db.collection("tg_groups").doc(String(gid)).update({ triggers: arr }); } catch (e) {}
+        groupConfigs.delete(String(gid));
+        await ack("Deleted ✅");
+        const c2 = await wizCheck(bot, q, gid);
+        if (c2) {
+            const a2 = c2.g.triggers || [];
+            await wizEdit(bot, q, `🗑 <b>Triggers</b> (${a2.length}):`, [
+                ...a2.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}`, callback_data: `wp_del:${gid}:${i}` }])),
+                [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+            ]);
+        }
+        return;
+    }
+    if (kind === "wp_i") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        let wn = 0, mn = 0;
+        try { const s = await db.collection("tg_warns").where("chatId", "==", String(gid)).limit(100).get(); wn = s.size; } catch (e) {}
+        try { const s = await db.collection("tg_members").where("chatId", "==", String(gid)).limit(200).get(); mn = s.size; } catch (e) {}
+        await wizEdit(bot, q, `📊 <b>${(c.g.title || "").slice(0, 50)}</b>\n<code>${gid}</code>\n\n👥 Members: <b>${mn}</b>\n⚠️ Warns: <b>${wn}</b>\n⚡Triggers: <b>${(c.g.triggers || []).length}</b>\n🤖 Bot: <b>${c.g.botUsername || "shared"}</b>`, [
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    await ack();
+}
+async function wizTextStep(bot, fromUser, w, text) {
+    const uid = fromUser.id.toString();
+    const clean = (text || "").trim();
+    if (w.action === "set") {
+        const numMeta = wizNumMeta(w.field);
+        const txtMeta = wizTextMeta(w.field);
+        if (!numMeta && !txtMeta) { wizMap.delete(uid); return; }
+        const gd = await db.collection("tg_groups").doc(String(w.groupId)).get().catch(() => null);
+        if (!gd || !gd.exists || ((gd.data() || {}).ownerUid || "") !== (await linkedUid(uid))) {
+            wizMap.delete(uid);
+            await bot.sendMessage(uid, `❌ Group পাওয়া যায়নি!`, { parse_mode: "HTML" }).catch(() => {});
+            return;
+        }
+        const payload = {};
+        if (numMeta) {
+            const n = Math.floor(Number(clean.replace(/[^0-9]/g, "")));
+            if (!isFinite(n)) {
+                await bot.sendMessage(uid, `❌ সংখ্যা দাও! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            payload[w.field] = Math.min(numMeta[3], Math.max(numMeta[2], n));
+        } else {
+            if (!clean) {
+                await bot.sendMessage(uid, `❌ খালি লেখা! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            if (w.field.startsWith("msgs.")) {
+                const cur = (gd.data() || {}).msgs || {};
+                cur[w.field.slice(5)] = clean.slice(0, 500);
+                payload.msgs = cur;
+            } else {
+                payload[w.field] = clean.slice(0, 1000);
+                if (w.field === "welcomeMsg") payload.welcomeMode = "custom";
+            }
+        }
+        try { await db.collection("tg_groups").doc(String(w.groupId)).set(payload, { merge: true }); } catch (e) {}
+        groupConfigs.delete(String(w.groupId));
+        wizMap.delete(uid);
+        await bot.sendMessage(uid, `✅ <b>Saved!</b> Bot ekhuni notun setting e cholbe।\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
+        return;
+    }
+    if (w.action === "trig") {
+        if (w.step === "kw") {
+            if (!clean || clean.length > 60) {
+                await bot.sendMessage(uid, `❌ 1-60 অক্ষরের keyword দাও! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            w.data.kw = clean; w.step = "reply"; w.at = Date.now();
+            wizMap.set(uid, w);
+            await bot.sendMessage(uid, `2️⃣ Reply message পাঠাও (user কী দেখবে):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+            return;
+        }
+        if (w.step === "reply") {
+            if (!clean) {
+                await bot.sendMessage(uid, `❌ খালি reply! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            w.data.reply = clean.slice(0, 1000); w.step = "del"; w.at = Date.now();
+            wizMap.set(uid, w);
+            await bot.sendMessage(uid, `3️⃣ Reply কত sec পর delete হবে? সংখ্যা পাঠাও — <b>0 = thakbe</b>:\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+            return;
+        }
+        if (w.step === "del") {
+            const n = Math.floor(Number(clean.replace(/[^0-9]/g, "")));
+            if (!isFinite(n) || n < 0 || n > 300) {
+                await bot.sendMessage(uid, `❌ 0-300 সংখ্যা দাও! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            const gd = await db.collection("tg_groups").doc(String(w.groupId)).get().catch(() => null);
+            if (!gd || !gd.exists || ((gd.data() || {}).ownerUid || "") !== (await linkedUid(uid))) {
+                wizMap.delete(uid);
+                await bot.sendMessage(uid, `❌ Group পাওয়া যায়নি!`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            const arr = ((gd.data() || {}).triggers || []).slice();
+            arr.push({ keyword: w.data.kw, reply: w.data.reply, deleteSec: n });
+            try { await db.collection("tg_groups").doc(String(w.groupId)).update({ triggers: arr }); } catch (e) {}
+            groupConfigs.delete(String(w.groupId));
+            wizMap.delete(uid);
+            await bot.sendMessage(uid, `✅ <b>Trigger saved!</b>\n🔑 <code>${w.data.kw}</code> → reply + ${n}s delete\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
+            return;
+        }
+    }
+    wizMap.delete(uid);
+}
+
 // ---------------- 8b. PER-GROUP CONFIG DEFAULTS (panel theke sob customize) ----------------
 // Purono group e notun field na thakleo default diye cholbe — backward compatible.
 const CFG_DEFAULTS = {
@@ -982,7 +1314,7 @@ groupBot.on("my_chat_member", async (msg) => {
                 fakeTitleMsg: "",
                 fakeTitleDeleteSec: 0,
                 fakeTitleDelete: false,
-                useDefaultBadWords: false,
+                useDefaultBadWords: true,
                 customBadWords: [],
                 filterDeleteSec: 4,
                 warnDeleteSec: 5,
@@ -1170,7 +1502,12 @@ groupBot.on("message", async (msg) => {
                     };
                     if (built.markup) sendOpts.reply_markup = built.markup;
 
-                    groupBot.sendMessage(chatId, trig.reply, sendOpts).catch((err) => {
+                    groupBot.sendMessage(chatId, trig.reply, sendOpts).then((sent) => {
+                        try {
+                            const tdel = cfgNum(trig, "deleteSec", 0, 0, 300);
+                            if (sent && sent.message_id && tdel > 0) autoDel(chatId, sent.message_id, tdel);
+                        } catch (e) {}
+                    }).catch((err) => {
                         console.error("[TRIGGER SEND ERR] chat=" + chatId + " keyword=\"" + trig.keyword + "\":", err.message);
                         const retry = { reply_to_message_id: msgId, disable_web_page_preview: true };
                         if (built.markup) retry.reply_markup = built.markup;
@@ -1183,16 +1520,73 @@ groupBot.on("message", async (msg) => {
             }
         }
 
-        // প্রাইভেটে /start,/help,/id — bot alive test
+        // প্রাইভেটে /start,/help,/id,/link,/panel — bot DM setup
         if (!isGroup) {
             if (isCommand(text, "/start") || isCommand(text, "/help")) {
                 await groupBot.sendMessage(chatId,
-                    `👋 <b>VS Protection Bot</b>\n\n✅ Bot <b>চালু আছে!</b>\n\n<b>Group e lagaben:</b>\n1️⃣ আমাকে group e add করুন\n2️⃣ <b>Admin</b> বানান (Delete + Ban + Pin)\n3️⃣ Panel er Claim Code দিয়ে group e লিখুন:\n<code>/claim CODE</code>\n\n❓ Help: /id — nijer ID dekhun`,
+                    `👋 <b>VS Protection Bot</b>\n\n✅ Bot <b>চালু আছে!</b>\n\n<b>Group e lagaben:</b>\n1️⃣ আমাকে group e add করুন\n2️⃣ <b>Admin</b> বানান (Delete + Ban + Pin)\n3️⃣ Panel er Claim Code দিয়ে group e লিখুন:\n<code>/claim CODE</code>\n\n<b>Panel ছাড়াই setup:</b>\n1️⃣ Panel → 🔗 Telegram Link থেকে CODE নিন\n2️⃣ এখানে পাঠান: <code>/link CODE</code>\n3️⃣ তারপর <code>/panel</code> — full menu bot-এর ভেতরেই!\n\n❓ /id — nijer ID dekhun`,
                     { parse_mode: "HTML" }).catch(() => {});
                 return;
             }
             if (isCommand(text, "/id")) {
                 await groupBot.sendMessage(chatId, `🆔 Your ID: <code>${fromUser.id}</code>`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            if (isCommand(text, "/link")) {
+                const code = (text.replace(/^\/link(@[A-Za-z0-9_]+)?/i, "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""));
+                if (!code) {
+                    await groupBot.sendMessage(chatId, `💡 <b>ব্যবহার:</b> <code>/link CODE</code>\nCODE পাবে Panel → 🔗 Telegram Link card e।`, { parse_mode: "HTML" }).catch(() => {});
+                    return;
+                }
+                try {
+                    const q = await db.collection("vs_users").where("tgLinkCode", "==", code).limit(1).get();
+                    if (q.empty) {
+                        await groupBot.sendMessage(chatId, `❌ ভুল CODE! Panel থেকে নতুন CODE নিয়ে আবার দাও।`, { parse_mode: "HTML" }).catch(() => {});
+                        return;
+                    }
+                    await q.docs[0].ref.update({ telegramId: fromUser.id.toString(), tgLinkCode: "" });
+                    linkCache.delete(fromUser.id.toString());
+                    await groupBot.sendMessage(chatId, `✅ <b>Connected!</b> এখন <code>/panel</code> লিখো — তোমার groups + full setting menu আসবে।`, { parse_mode: "HTML" }).catch(() => {});
+                } catch (e) {
+                    await groupBot.sendMessage(chatId, `❌ Link failed, pore abar try koro।`, { parse_mode: "HTML" }).catch(() => {});
+                }
+                return;
+            }
+            if (isCommand(text, "/unlink")) {
+                try {
+                    const q = await db.collection("vs_users").where("telegramId", "==", fromUser.id.toString()).limit(1).get();
+                    if (!q.empty) await q.docs[0].ref.update({ telegramId: "" });
+                    linkCache.delete(fromUser.id.toString());
+                } catch (e) {}
+                await groupBot.sendMessage(chatId, `✅ Unlinked!`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            if (isCommand(text, "/cancel")) {
+                wizMap.delete(fromUser.id.toString());
+                await groupBot.sendMessage(chatId, `🚫 Cancelled! <code>/panel</code> দিয়ে আবার শুরু করো।`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            if (isCommand(text, "/panel")) {
+                const uid = await linkedUid(fromUser.id.toString());
+                if (!uid) {
+                    await groupBot.sendMessage(chatId, `🔗 <b>আগে connect করো!</b>\n\n1️⃣ Panel → 🔗 Telegram Link → CODE copy\n2️⃣ এখানে পাঠাও: <code>/link CODE</code>\n3️⃣ তারপর <code>/panel</code>`, { parse_mode: "HTML" }).catch(() => {});
+                    return;
+                }
+                const gs = await ownedGroups(uid);
+                if (!gs.length) {
+                    await groupBot.sendMessage(chatId, `📭 এখনো group link নেই!\n\nBot কে group e add + <b>Admin</b> বানাও (নিজের bot হলে auto-link, shared bot হলে <code>/claim CODE</code>) — তারপর <code>/panel</code>।`, { parse_mode: "HTML" }).catch(() => {});
+                    return;
+                }
+                await groupBot.sendMessage(chatId, `🏠 <b>তোমার Groups</b> — setting করতে tap করো:`, {
+                    parse_mode: "HTML",
+                    reply_markup: { inline_keyboard: gs.slice(0, 20).map((g) => ([{ text: `📋 ${(g.title || g.id).slice(0, 40)}`, callback_data: `wp_g:${g.id}` }])) }
+                }).catch(() => {});
+                return;
+            }
+            // Wizard text step (trigger add / number / text value)
+            const w0 = wizGet(fromUser.id.toString());
+            if (w0) {
+                await wizTextStep(groupBot, fromUser, w0, text);
                 return;
             }
             return;
@@ -1615,6 +2009,18 @@ groupBot.on("message", async (msg) => {
                 let wOwner = await getFreshOwner(chatId, groupConf);
                 const curWarns = (await getWarnCount(chatId, userId)) + 1;
                 await setWarnCount(chatId, userId, curWarns, wOwner);
+                // Gali log — panel + admin DM theke pore dekha jabe (ke ki bollo)
+                try {
+                    await db.collection("tg_gali_log").add({
+                        chatId, userId,
+                        name: String(currentName || "").slice(0, 80),
+                        username: String(currentUsername || "").slice(0, 40),
+                        text: String(text || "").slice(0, 300),
+                        warns: curWarns, action,
+                        ownerUid: wOwner || "",
+                        createdAt: admin.firestore.FieldValue.serverTimestamp()
+                    });
+                } catch (e) {}
                 const atName = `@${fromUser.username || fromUser.first_name}`;
 
                 if (curWarns >= limit) {
@@ -1712,6 +2118,10 @@ groupBot.on("callback_query", async (query) => {
         const fromUser = query.from;
         const chatId = query.message.chat.id;
 
+        if (data === "wp_back" || data.startsWith("wp_")) {
+            await wizCallback(groupBot, query);
+            return;
+        }
         if (data.startsWith("giveaway_join:")) {
             const giveawayId = data.split(":")[1];
             const gRef = db.collection("giveaways").doc(giveawayId);

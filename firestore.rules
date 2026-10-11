@@ -82,6 +82,12 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // gali log: ke ki gali dilo — owner panel theke dekhbe, likhbe shudhu bot
+    match /tg_gali_log/{logId} {
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
     // default deny everything else
     match /{document=**} {
       allow read, write: if false;
