@@ -109,6 +109,12 @@ function wordHit(textLower, word) {
     }
     return textLower.includes(w);
 }
+// Boundary list er sob word (je kono length) — sudhu alada word হিসেবে মিলবে
+function wordBoundary(textLower, word) {
+    const w = (word || "").toLowerCase().trim();
+    if (!w) return false;
+    try { return new RegExp("\\b" + escRe(w) + "\\b", "i").test(textLower); } catch (e) { return textLower.includes(w); }
+}
 function isInboxText(text) {
     const t = (text || "").toLowerCase();
     if (!t) return false;
@@ -117,29 +123,112 @@ function isInboxText(text) {
     return false;
 }
 
-// আসল গালি তালিকা (বাংলা ও বাংলিশ) — choto word (mc/bc) boundary diye milbe
+// FULL gali list (Bangla + English + Banglish) — built-in default.
+// Bypass-proof: matching এর সময় symbol/space মুছে + leet (4=a,0=o...) + repeat
+// letter (fuuuck→fuk) normalize করে মেলানো হয়, তাই f.u.c.k / phuck / b!tch ও ধরা পড়ে।
 const REAL_BAD_WORDS = [
-    "madarchod", "madarshod", "bessha", "khanki", "magi", "chudi", "chuda",
-    "chudo", "balsal", "baler", "suor", "kutta", "gandu", "harami", "bokachoda", "chodar",
-    "chudte", "malai", "dimaon", "মাদারচোদ", "খানকি", "মাগী", "চোদা", "চুদি", "বাল",
-    "শুয়োর", "কুত্তা", "হারামি", "বোকাচোদা", "চোদ", "বেশ্যা", "খানকিরপোল"
+    // --- English ---
+    "fuck", "fucking", "fucker", "fucked", "motherfucker", "fck", "fuk",
+    "shit", "shits", "shitty", "sht", "bullshit", "horseshit", "dipshit",
+    "bitch", "bitches", "btch", "bch", "dick", "dicks", "dickhead", "dck",
+    "pussy", "pssy", "asshole", "bastard", "whore", "slut", "sluts",
+    "cunt", "wanker", "tosser", "dumbass", "jackass", "smartass",
+    "blowjob", "handjob", "porn", "porno", "horny", "nude", "nudes",
+    "boob", "boobs", "tits", "sexy", "sexting", "suck", "prick", "douche",
+    "retard", "faggot", "nigga", "nigger", "cumshot", "cumming",
+    // --- Banglish (beshi) ---
+    "madarchod", "madarshod", "maderchod", "madarchud", "madarchoda", "motherchod",
+    "behanchod", "behnchod", "bhenchod", "bhenchud", "bonchod",
+    "sisterchod", "betichod", "betichoda", "fatherchod",
+    "bokachoda", "bokachuda", "bokachod", "bokachud", "bokachodar",
+    "khanki", "khangi", "khankipara", "khankibaz", "magir", "magirpola", "magibaz", "magipara",
+    "chudi", "chuda", "chudo", "chude", "chudte", "chudbe", "chudlam", "chudar",
+    "chudirbhai", "chudirbeta", "chodachudi", "chudachudi",
+    "chodar", "chodna", "chod", "choda", "chodon",
+    "randir", "randikhana", "randibaz", "randipara", "bessha", "beshya",
+    "kutta", "kuttar", "kuttarbachcha", "kuttaibachcha", "kukur",
+    "suor", "suyor", "shuor", "shuar", "shuorerbachcha", "shukor",
+    "harami", "haramir", "haramjada", "haramjadi", "haramjad", "haramkhor",
+    "gandu", "gandur", "gandmara", "gandmarani", "marani",
+    "shala", "shalar", "abaler",
+    "baler", "balchal", "balsal", "baal", "balerbal", "malai", "dimaon",
+    "dalal", "batpar", "dhandabaz", "fotka", "fotkabaz", "chotolok", "fokini", "fokinnni",
+    "chiter", "chitingbaz", "dhokabaz", "bhondo",
+    "luichcha", "luchcha", "bodmaish", "bodmash", "beyadob",
+    "shoytan", "shaitan", "shoitan", "soytaner", "iblis", "lanot", "behaya", "beshorom",
+    "chamcha", "telbaj", "nimokharam", "bejonma", "jaroj", "munafik",
+    "gadha", "boka", "murkho", "ahammok", "ulluk", "chasha", "khet", "habla",
+    "chagol", "ramchagol", "goru", "shiyal", "bador",
+    "dakat", "dakait", "khuni", "gunda", "mastan",
+    "juta", "jhata", "lathkhor", "potita",
+    "hijra", "hizra", "chakka", "malaun", "katua", "barovatari", "barobhatari",
+    "shudkhor", "ghushkhor", "modkhor", "ganjakhor", "neshakhor", "babakhor",
+    "chorer", "marbo", "merefelbo", "khunkorbo",
+    // --- Bangla (beshi) ---
+    "মাদারচোদ", "বোকাচোদা", "বোকাচুদা", "খানকি", "খানকিরপোলা", "খানকিরছেলে", "খানকিপাড়া",
+    "মাগী", "মাগিরপোলা", "চোদা", "চুদি", "চোদনা", "চোদন", "চোদাচুদি",
+    "রান্ডি", "রান্ডিখানা", "রান্ডিপাড়া", "বাল", "বালের", "বালছাল",
+    "বেশ্যা", "শুয়োর", "শুয়োরেরবাচ্চা", "শুকর",
+    "কুত্তা", "কুত্তারবাচ্চা", "কুকুর", "হারামি", "হারামজাদা", "হারামজাদি", "হারামখোর",
+    "দালাল", "বাটপার", "ফটকা", "ফটকাবাজ", "ধান্দাবাজ", "ধোঁকাবাজ", "ভণ্ড",
+    "ছোটলোক", "ফকিন্নি", "চুদিরভাই", "চুদিরবেটা", "মাগিপাড়া",
+    "বেহায়া", "বেশরম", "বেয়াদব", "গান্ডু", "মারানি",
+    "লুইচ্চা", "বদমাশ", "চিটার", "চিটিংবাজ", "চামচা", "তেলবাজ",
+    "শালা", "আবাল", "নিমকহারাম", "বেজন্মা", "জারজ", "মুনাফিক",
+    "গাধা", "বোকা", "মূর্খ", "আহাম্মক", "উল্লুক", "চাষা", "ক্ষেত", "হাবলা",
+    "ছাগল", "রামছাগল", "গরু", "শিয়াল", "বাদর",
+    "ডাকাত", "খুনি", "গুন্ডা", "মাস্তান", "বেটিচোদ",
+    "জুতা", "ঝাঁটা", "লাথখোর", "পতিতা", "হিজড়া", "চাক্কা",
+    "মালাউন", "কাটুয়া", "বারোভাতারি", "চোর", "চুরি",
+    "সুদখোর", "ঘুষখোর", "মদখোর", "গাঁজাখোর", "নেশাখোর", "বাবাখোর",
+    "মারবো", "মেরেফেলবো", "খুনকরব", "শয়তান", "ইবলিস"
 ];
-const SHORT_BAD_WORDS = ["mc", "bc"];
-function containsBadWord(text) {
+// Choto/dangerous word — শুধু আলাদা word হিসেবে মিলবে
+// (class/unisex/magic/shoe/title/cucumber/branding এ ধরবে না)
+const BOUNDARY_BAD_WORDS = ["mc", "bc", "ass", "sex", "cum", "tit", "hoe", "magi", "randi", "abal", "chor", "churi"];
+// Abuse normalizer: symbol strip + ph→f + leet + repeat-collapse
+function normAbuse(s) {
+    let x = String(s || "").toLowerCase().replace(/[^a-z0-9\u0980-\u09FF]/g, "");
+    x = x.replace(/ph/g, "f");
+    x = x.replace(/[0134578@$]/g, (c) => ({ "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "@": "a", "$": "s" }[c]));
+    return x.replace(/(.)\1+/g, "$1");
+}
+// Leet-map (symbol/space রেখে) — boundary word এর 4ss/a55/s3x trick ও ধরে
+function leetMap(s) {
+    return String(s || "").toLowerCase().replace(/[0134578@$]/g, (c) => ({ "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "@": "a", "$": "s" }[c]));
+}
+let normBadCache = null;
+// conf.customBadWords (panel থেকে MANUAL list) সবসময় চেক হয়।
+// Built-in list শুধু panel এ "Default list" toggle ON করলে চেক হয় —
+// default OFF, অর্থাৎ auto কিছু নেই, সব manual।
+function containsBadWord(text, conf) {
     const t = (text || "").toLowerCase();
     if (!t) return false;
-    const cleanText = t.replace(/[^a-zA-Z0-9\u0980-\u09FF]/g, "");
-    for (const bad of REAL_BAD_WORDS) {
-        const b = bad.toLowerCase();
-        if (t.includes(b) || (b && cleanText.includes(b))) {
-            // "বাল" / "চোদ" er moto choto bangla ongsho onno shobde thakte pare —
-            // 3+ char bangla holeo kompokkhe word-boundary / space check kori na, kintu
-            // khub choto (<=2) hole skip. Ekhane sob 3+ tai includes ok.
-            return true;
+    for (const b of BOUNDARY_BAD_WORDS) { if (wordBoundary(t, b) || wordBoundary(leetMap(t), b)) return true; }
+    const nText = normAbuse(t);
+    if (!nText) return false;
+    const checkList = (list) => {
+        for (const bad of (list || [])) {
+            const b = String(bad || "").trim().toLowerCase();
+            if (!b || b.length < 2) continue;
+            if (nText.includes(normAbuse(b))) return true;
         }
+        return false;
+    };
+    if (checkList(conf && conf.customBadWords)) return true;
+    if (conf && conf.useDefaultBadWords === true) {
+        if (!normBadCache) normBadCache = REAL_BAD_WORDS.map(normAbuse);
+        for (const nb of normBadCache) { if (nb && nText.includes(nb)) return true; }
     }
-    for (const sb of SHORT_BAD_WORDS) { if (wordHit(t, sb)) return true; }
     return false;
+}
+// Inline URL-button আছে? (bot/ad রা message এর নিচে button-link দেয়)
+function hasUrlButton(msg) {
+    try {
+        const kb = msg && msg.reply_markup && msg.reply_markup.inline_keyboard;
+        if (!Array.isArray(kb)) return false;
+        return kb.some((row) => Array.isArray(row) && row.some((b) => b && b.url));
+    } catch (e) { return false; }
 }
 
 // ---------------- 4. BROADCAST API ----------------
@@ -322,9 +411,10 @@ app.post("/api/tg/test-trigger", async (req, res) => {
 
 // ---------------- 6. GIVEAWAY API ----------------
 app.post("/api/tg/create-giveaway", async (req, res) => {
-    const { chatId, title, itemName, amount, winnersCount, botId } = req.body;
+    const { chatId, title, itemName, amount, winnersCount, desc, photoUrl, durationH, botId } = req.body;
     if (!chatId || !title || !itemName) return res.status(400).json({ ok: false, error: "সবগুলো তথ্য পূরণ করুন" });
     const sender = pickBot(botId) || groupBot;
+    const durH = Math.max(0, Number(durationH) || 0);
 
     try {
         let gOwner = "";
@@ -332,69 +422,88 @@ app.post("/api/tg/create-giveaway", async (req, res) => {
         const giveawayRef = await db.collection("giveaways").add({
             chatId: chatId.toString(),
             ownerUid: gOwner,
-            title,
-            itemName,
+            title, itemName,
             amount: amount || "",
-            winnersCount: Number(winnersCount || 1),
+            desc: (desc || "").toString().slice(0, 500),
+            photoUrl: (photoUrl || "").toString().slice(0, 500),
+            durationH: durH,
+            winnersCount: Math.max(1, Number(winnersCount || 1)),
             participants: [],
             status: "active",
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        const gMsg = await sender.sendMessage(chatId,
-            `🎉 <b>${title}</b>\n\n` +
-            `🎁 <b>পুরস্কার:</b> ${amount ? amount + " " : ""}${itemName}\n` +
-            `🏆 <b>বিজয়ী নির্বাচন:</b> ${winnersCount} জন\n\n` +
-            `👇 নিচের বাটনে চাপ দিয়ে এখনই অংশগ্রহণ করুন!`,
-            {
-                parse_mode: "HTML",
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: `🎉 Join Giveaway [0]`, callback_data: `giveaway_join:${giveawayRef.id}` }]
-                    ]
-                }
-            }
-        );
+        const prizeLine = `🎁 <b>Prize:</b> ${amount ? amount + " " : ""}${itemName}`;
+        const joinBtn = (n) => ({ inline_keyboard: [[{ text: `🎉 Join (${n})`, callback_data: `giveaway_join:${giveawayRef.id}` }]] });
+        const caption =
+            `🎊 <b>${title}</b> 🎊\n` +
+            `━━━━━━━━━━━━\n` +
+            `${prizeLine}\n` +
+            (desc ? `📝 ${desc}\n` : ``) +
+            `🏆 <b>Winners:</b> ${Math.max(1, Number(winnersCount || 1))} জন\n` +
+            (durH > 0 ? `⏳ <b>Ends in:</b> ${durH} ঘণ্টা (auto-result!)\n` : `⏳ <b>Ends:</b> admin End চাপলে\n`) +
+            `━━━━━━━━━━━━\n` +
+            `👇 <b>Join</b> বাটনে চাপ দিয়ে অংশ নাও!`;
+        let gMsg;
+        if (photoUrl) {
+            gMsg = await sender.sendPhoto(chatId, photoUrl, { caption, parse_mode: "HTML", reply_markup: joinBtn(0) }).catch(async () => {
+                return sender.sendMessage(chatId, caption, { parse_mode: "HTML", reply_markup: joinBtn(0) });
+            });
+        } else {
+            gMsg = await sender.sendMessage(chatId, caption, { parse_mode: "HTML", reply_markup: joinBtn(0) });
+        }
         await sender.pinChatMessage(chatId, gMsg.message_id).catch(() => {});
 
         await giveawayRef.update({ messageId: gMsg.message_id });
-        return res.json({ ok: true, message: "গিভঅ্যাওয়ে পোস্ট করা হয়েছে!", giveawayId: giveawayRef.id });
+
+        // Auto-end timer (server restart হলে manual End দিও)
+        if (durH > 0) {
+            setTimeout(() => { finishGiveaway(giveawayRef.id, sender).catch(() => {}); }, Math.min(durH, 168) * 3600 * 1000);
+        }
+        return res.json({ ok: true, message: "🎉 Premium giveaway পোস্ট হয়েছে!" + (durH > 0 ? ` (${durH}h পর auto-result)` : ""), giveawayId: giveawayRef.id });
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
     }
 });
 
+// Shared finish logic — manual End + auto timer দুটোই ব্যবহার করে
+async function finishGiveaway(giveawayId, sender) {
+    const gDoc = await db.collection("giveaways").doc(giveawayId).get();
+    if (!gDoc.exists) return { ok: false, error: "Giveaway not found" };
+    const g = gDoc.data();
+    if (g.status === "ended") return { ok: false, error: "ইতিমধ্যে সমাপ্ত হয়েছে" };
+
+    const participants = g.participants || [];
+    if (participants.length === 0) {
+        await sender.sendMessage(g.chatId, `⚠️ <b>${g.title} সমাপ্ত:</b> কোনো অংশগ্রহণকারী পাওয়া যায়নি।`, { parse_mode: "HTML" });
+        await gDoc.ref.update({ status: "ended" });
+        return { ok: true, message: "No participants" };
+    }
+
+    const shuffled = participants.sort(() => 0.5 - Math.random());
+    const winners = shuffled.slice(0, Math.min(g.winnersCount, participants.length));
+
+    let winnerText = `🎊 <b>GIVEAWAY RESULT</b> 🎊\n━━━━━━━━━━━━\n\n🎉 <b>${g.title}</b>\n🎁 <b>Prize:</b> ${g.amount ? g.amount + " " : ""}${g.itemName}\n👥 <b>Joined:</b> ${participants.length} জন\n\n`;
+    winners.forEach((w, idx) => {
+        winnerText += `🥇 <b>Winner ${idx + 1}:</b> <a href="tg://user?id=${w.id}">${w.name}</a> (<code>${w.id}</code>)\n`;
+    });
+    winnerText += `\n━━━━━━━━━━━━\n🎉 অভিনন্দন! এডমিনের সাথে যোগাযোগ করে পুরস্কার নাও।`;
+
+    await sender.sendMessage(g.chatId, winnerText, { parse_mode: "HTML" });
+    await sender.unpinChatMessage(g.chatId).catch(() => {});
+    await gDoc.ref.update({ status: "ended", winners });
+
+    return { ok: true, winners };
+}
+
 app.post("/api/tg/end-giveaway", async (req, res) => {
     const { giveawayId, botId } = req.body;
     try {
-        const gDoc = await db.collection("giveaways").doc(giveawayId).get();
-        if (!gDoc.exists) return res.status(404).json({ ok: false, error: "Giveaway not found" });
         const sender = pickBot(botId) || groupBot;
-
-        const g = gDoc.data();
-        if (g.status === "ended") return res.status(400).json({ ok: false, error: "ইতিমধ্যে সমাপ্ত হয়েছে" });
-
-        const participants = g.participants || [];
-        if (participants.length === 0) {
-            await sender.sendMessage(g.chatId, `⚠️ <b>${g.title} সমাপ্ত:</b> কোনো অংশগ্রহণকারী পাওয়া যায়নি।`, { parse_mode: "HTML" });
-            await gDoc.ref.update({ status: "ended" });
-            return res.json({ ok: true, message: "No participants" });
-        }
-
-        const shuffled = participants.sort(() => 0.5 - Math.random());
-        const winners = shuffled.slice(0, Math.min(g.winnersCount, participants.length));
-
-        let winnerText = `🏆 <b>গিভঅ্যাওয়ে ফলাফল ও বিজয়ীদের তালিকা!</b>\n\n🎉 <b>${g.title}</b>\n🎁 <b>পুরস্কার:</b> ${g.amount ? g.amount + " " : ""}${g.itemName}\n\n`;
-        winners.forEach((w, idx) => {
-            winnerText += `🥇 <b>Winner ${idx + 1}:</b> <a href="tg://user?id=${w.id}">${w.name}</a> (<code>${w.id}</code>)\n`;
-        });
-        winnerText += `\n🎉 অভিনন্দন সবাইকে! এডমিনের সাথে যোগাযোগ করে পুরস্কার সংগ্রহ করুন।`;
-
-        await sender.sendMessage(g.chatId, winnerText, { parse_mode: "HTML" });
-        await sender.unpinChatMessage(g.chatId).catch(() => {});
-        await gDoc.ref.update({ status: "ended", winners });
-
-        return res.json({ ok: true, winners });
+        const out = await finishGiveaway(giveawayId, sender);
+        if (!out.ok && out.error === "Giveaway not found") return res.status(404).json(out);
+        if (!out.ok) return res.status(400).json(out);
+        return res.json(out.winners ? { ok: true, winners: out.winners } : { ok: true, message: out.message });
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
     }
@@ -520,7 +629,8 @@ const CFG_DEFAULTS = {
     floodOn: true, floodLimit: 6, floodWindowSec: 10, floodMuteCount: 10, floodMuteMin: 10,
     floodMsg: "এত দ্রুত মেসেজ পাঠাবেন না! (Flood control)",
     scammerAlertOn: true, scammerMsg: "",
-    nameTrackOn: true, leaveLogOn: true,
+    nameTrackOn: true, leaveLogOn: true, liveNotifyOn: true, galiDmOn: true,
+    notifyAdmins: [], adminGaliMsg: "",
     welcomeMode: "global", welcomeMsg: "", welcomeImg: "", welcomeDeleteSec: 10,
     trigCooldownSec: 15
 };
@@ -651,6 +761,35 @@ async function delMsg(chatId, msgId) {
     try { await groupBot.deleteMessage(chatId, msgId); }
     catch (e) { hintNoRights(chatId, e); }
 }
+// Factory-local autoDel — closure bot দিয়ে delete (global টা default bot ব্যবহার করে)
+function autoDel(chatId, messageId, sec) {
+    if (!sec || sec <= 0 || !messageId) return;
+    setTimeout(() => groupBot.deleteMessage(chatId, messageId).catch(() => {}), sec * 1000);
+}
+// Admin DM list (live/gali alert যাবে) + throttle map
+const notifySeen = new Map();
+async function getNotifyAdmins(chatId, conf) {
+    let lst = Array.isArray(conf && conf.notifyAdmins) ? conf.notifyAdmins.map((x) => String(x)) : [];
+    if (!lst.length) {
+        try {
+            const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+            if (gd.exists) lst = ((gd.data() || {}).notifyAdmins || []).map((x) => String(x));
+        } catch (e) {}
+    }
+    return [...new Set(lst)].filter((x) => /^\d{5,}$/.test(x)).slice(0, 5);
+}
+async function dmAdmins(chatId, conf, html) {
+    try {
+        const lst = await getNotifyAdmins(chatId, conf);
+        for (const aid of lst) {
+            try { await groupBot.sendMessage(aid, html, { parse_mode: "HTML", disable_web_page_preview: true }); }
+            catch (e) {
+                try { await groupBot.sendMessage(aid, html.replace(/<[^>]*>/g, ""), { disable_web_page_preview: true }); } catch (e2) {}
+            }
+        }
+    } catch (e) {}
+}
+function cleanName(s) { return String(s || "").replace(/[<>&]/g, "").slice(0, 60) || "Member"; }
 
 // গ্রুপে বট অ্যাড হলেই স্বয়ংক্রিয় রেজিস্টার (default protection ON)
 groupBot.on("my_chat_member", async (msg) => {
@@ -675,10 +814,15 @@ groupBot.on("my_chat_member", async (msg) => {
                 antiVideo: false,
                 antiForward: true,
                 antiInbox: true,
+                antiBot: true,
+                antiButton: true,
+                useDefaultBadWords: false,
+                customBadWords: [],
                 filterDeleteSec: 4,
                 warnDeleteSec: 5,
                 floodOn: true, floodLimit: 6, floodWindowSec: 10, floodMuteCount: 10, floodMuteMin: 10,
                 scammerAlertOn: true, nameTrackOn: true, leaveLogOn: true,
+                liveNotifyOn: true, galiDmOn: true, notifyAdmins: [], adminGaliMsg: "",
                 welcomeMode: "global", welcomeDeleteSec: 10, trigCooldownSec: 15,
                 lastActive: admin.firestore.FieldValue.serverTimestamp()
             };
@@ -797,19 +941,45 @@ groupBot.on("message", async (msg) => {
 
         // অ্যানোনিমাস এডমিন সাপোর্ট
         const isAnonymousAdmin = fromUser && (fromUser.username === "GroupAnonymousBot" || fromUser.id === 1087968824);
-        if (!fromUser || (fromUser.is_bot && !isAnonymousAdmin)) return;
+        if (!fromUser) return;
+        const isBotSender = fromUser.is_bot && !isAnonymousAdmin;
 
         const userId = isAnonymousAdmin ? chatId : fromUser.id.toString();
         const currentName = isAnonymousAdmin ? (msg.chat.title || "Admin") : `${fromUser.first_name || ""} ${fromUser.last_name || ""}`.trim();
         const currentUsername = isAnonymousAdmin ? `@${msg.chat.username || "anonymous"}` : (fromUser.username ? `@${fromUser.username}` : "None");
         const text = (msg.text || msg.caption || "").trim();
 
-        // ১. ইনস্ট্যান্ট কাস্টম অটো-রিপ্লাই (keyword match + 15s cooldown)
+        // ১. ইনস্ট্যান্ট কাস্টম অটো-রিপ্লাই (keyword match + cooldown)
+        // NOTE: cooldown = একই user একই keyword এ কত sec পর পর reply পাবে (0 = সবসময়)।
         let groupConf = groupConfigs.get(chatId);
         if (!groupConf) {
             const gDoc = await db.collection("tg_groups").doc(chatId).get();
             groupConf = gDoc.exists ? gDoc.data() : {};
             if (gDoc.exists) groupConfigs.set(chatId, groupConf);
+        }
+
+        // Bot sender (auto-join ad-bot সহ): antiBot ON থাকলে delete, sonst skip.
+        // Bot দের trigger/tracker/command কিছুই চলে না (loop protection)।
+        // sender_chat (linked-channel post) কে ছোঁয়া হবে না।
+        if (isBotSender && !msg.sender_chat) {
+            if (groupConf.antiBot !== false) await delMsg(chatId, msgId);
+            return;
+        }
+
+        // 🔴 LIVE event (voice-chat/live-stream শুরু): group e কিছু post হবে না,
+        // শুধু admin দের DM যাবে (liveNotifyOn + notifyAdmins)।
+        if (isGroup && (msg.video_chat_started || msg.video_chat_scheduled)) {
+            try {
+                if (cfgBool(groupConf, "liveNotifyOn", true)) {
+                    const starter = (fromUser && !fromUser.is_bot)
+                        ? cleanName(`${fromUser.first_name || ""} ${fromUser.last_name || ""}`.trim()) +
+                          (fromUser.username ? ` (@${fromUser.username})` : ` (<code>${fromUser.id}</code>)`)
+                        : "Someone";
+                    await dmAdmins(chatId, groupConf,
+                        `🔴 <b>LIVE cholche!</b>\n\n👤 ${starter}\n📍 <b>${cleanName(msg.chat.title)}</b> (<code>${chatId}</code>)\n\nGroup call button e chap diye join koro.`);
+                }
+            } catch (e) {}
+            return;
         }
 
         if (groupConf && groupConf.triggers && groupConf.triggers.length > 0 && text) {
@@ -889,6 +1059,20 @@ groupBot.on("message", async (msg) => {
         }
 
         const isAdmin = await isGroupAdmin(chatId, fromUser, msg);
+
+        // Admin ID auto-collect (live/gali DM যাবে) — 24h te 1 bar write
+        if (isAdmin && fromUser && !isAnonymousAdmin && !fromUser.is_bot) {
+            try {
+                const nk = chatId + ":" + fromUser.id;
+                if (Date.now() - (notifySeen.get(nk) || 0) > 24 * 3600 * 1000) {
+                    notifySeen.set(nk, Date.now());
+                    if (notifySeen.size > 2000) notifySeen.clear();
+                    await db.collection("tg_groups").doc(chatId).set(
+                        { notifyAdmins: admin.firestore.FieldValue.arrayUnion(fromUser.id.toString()) },
+                        { merge: true }).catch(() => {});
+                }
+            } catch (e) {}
+        }
 
         // Diagnostic: /id — group + user ID (sobai, bot alive proof)
         if (isCommand(text, "/id")) {
@@ -1004,6 +1188,83 @@ groupBot.on("message", async (msg) => {
             return;
         }
 
+        // Mod commands — group থেকেই ban/unban/kick/mute/warn (panel খোলা লাগে না, admin only)
+        // reply দিয়ে: /ban /kick | reply বা ID দিয়ে: /unban /mute /unmute /warn /warns
+        if (isCommand(text, "/ban") || isCommand(text, "/unban") || isCommand(text, "/kick") ||
+            isCommand(text, "/mute") || isCommand(text, "/unmute") ||
+            isCommand(text, "/warn") || isCommand(text, "/warns")) {
+            if (!isAdmin) {
+                const w = await groupBot.sendMessage(chatId, `⚠️ এই কমান্ড কেবল গ্রুপ এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                autoDel(chatId, w.message_id, warnDeleteSec(groupConf));
+                return;
+            }
+            const getTarget = () => {
+                if (msg.reply_to_message && msg.reply_to_message.from) {
+                    const tu = msg.reply_to_message.from;
+                    return { id: tu.id.toString(), name: `${tu.first_name || ""} ${tu.last_name || ""}`.trim() || tu.id.toString() };
+                }
+                const parts = (text || "").split(/\s+/);
+                for (let i = 1; i < parts.length; i++) {
+                    const dig = parts[i].replace(/[^0-9]/g, "");
+                    if (dig.length >= 5) return { id: dig, name: dig };
+                }
+                return null;
+            };
+            const tgt = getTarget();
+            if (!tgt && (isCommand(text, "/ban") || isCommand(text, "/kick") || isCommand(text, "/mute") || isCommand(text, "/warn") || (isCommand(text, "/warns") && msg.reply_to_message))) {
+                await groupBot.sendMessage(chatId, `💡 যাকে শাস্তি দেবে তাকে <b>reply</b> দিয়ে কমান্ড দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                return;
+            }
+            if (isCommand(text, "/ban")) {
+                await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
+                await groupBot.sendMessage(chatId, `🔨 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>ব্যান</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+            } else if (isCommand(text, "/unban")) {
+                if (!tgt) { await groupBot.sendMessage(chatId, `💡 <code>/unban USER_ID</code> — ID দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId }); return; }
+                await groupBot.unbanChatMember(chatId, tgt.id, { only_if_banned: true }).catch((e) => { hintNoRights(chatId, e); });
+                await groupBot.sendMessage(chatId, `✅ <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>আনব্যান</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+            } else if (isCommand(text, "/kick")) {
+                await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
+                await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
+                await groupBot.sendMessage(chatId, `👢 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>কিক</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+            } else if (isCommand(text, "/mute")) {
+                const parts = (text || "").split(/\s+/);
+                let mins = 60;
+                for (let i = 1; i < parts.length; i++) { const n = parseInt(parts[i].replace(/[^0-9]/g, ""), 10); if (isFinite(n) && n > 0 && n <= 10080) { mins = n; break; } }
+                await groupBot.restrictChatMember(chatId, tgt.id, {
+                    permissions: { can_send_messages: false },
+                    until_date: Math.floor(Date.now() / 1000) + mins * 60
+                }).catch((e) => { hintNoRights(chatId, e); });
+                await groupBot.sendMessage(chatId, `🔇 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>${mins} মিনিট মিউট</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+            } else if (isCommand(text, "/unmute")) {
+                if (!tgt) { await groupBot.sendMessage(chatId, `💡 <code>/unmute USER_ID</code> — ID দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId }); return; }
+                await groupBot.restrictChatMember(chatId, tgt.id, {
+                    permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true }
+                }).catch((e) => { hintNoRights(chatId, e); });
+                await groupBot.sendMessage(chatId, `🔊 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>আনমিউট</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+            } else if (isCommand(text, "/warn")) {
+                const wOwner = await getFreshOwner(chatId, groupConf);
+                const n = (await getWarnCount(chatId, tgt.id)) + 1;
+                await setWarnCount(chatId, tgt.id, n, wOwner);
+                const limit = Math.max(2, Number(groupConf.warnLimit) || 5);
+                await groupBot.sendMessage(chatId, `⚠️ <a href="tg://user?id=${tgt.id}">${tgt.name}</a> ওয়ার্ন <b>(${n}/${limit})</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                if (n >= limit) {
+                    const action = groupConf.warnAction || "ban";
+                    if (action === "mute") {
+                        await groupBot.restrictChatMember(chatId, tgt.id, { permissions: { can_send_messages: false }, until_date: Math.floor(Date.now() / 1000) + 3600 }).catch((e) => { hintNoRights(chatId, e); });
+                    } else if (action !== "warn") {
+                        await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
+                    }
+                    await clearWarn(chatId, tgt.id);
+                }
+            } else if (isCommand(text, "/warns")) {
+                const qid = tgt ? tgt.id : fromUser.id.toString();
+                const qn = tgt ? tgt.name : currentName;
+                const c = await getWarnCount(chatId, qid);
+                await groupBot.sendMessage(chatId, `📋 <a href="tg://user?id=${qid}">${qn}</a>-এর ওয়ার্ন: <b>${c}</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+            }
+            return;
+        }
+
         // Name Change Tracker (English auto) + Scammer Alert (admin + member sobar jonno)
         try {
             if (cfgBool(groupConf, "nameTrackOn", true)) {
@@ -1034,6 +1295,17 @@ groupBot.on("message", async (msg) => {
                 }
             }
         } catch (e) {}
+
+        // Admin gali → NO delete/ban/warn, শুধু মজার reply (mojar jonno)
+        if (isAdmin && text && containsBadWord(text, groupConf)) {
+            const tpl = (groupConf.adminGaliMsg || "").trim() ||
+                `😂 <b>{name}</b>! Admin hoye gali diccho? Moja kore nilam — delete korlam na, ebar maaf! 😎`;
+            await groupBot.sendMessage(chatId, tpl.split("{name}").join(cleanName(currentName)),
+                { parse_mode: "HTML", reply_to_message_id: msgId }).catch(async () => {
+                await groupBot.sendMessage(chatId, tpl.split("{name}").join(cleanName(currentName)),
+                    { reply_to_message_id: msgId }).catch(() => {});
+            });
+        }
 
         // এডমিন মেসেজে কোনো ফিল্টার চলবে না (command/tracker sesh, ekhon return)
         if (isAdmin) return;
@@ -1071,6 +1343,14 @@ groupBot.on("message", async (msg) => {
         }
 
         if (!isAdmin) {
+            // ০.৫ বাটন-লিংক/বিজ্ঞাপন ব্লক (message এর নিচে URL button — ad-bot দের হাতিয়ার)
+            if (groupConf.antiButton !== false && hasUrlButton(msg)) {
+                await delMsg(chatId, msgId);
+                const btnMsg = (groupConf.msgs && (groupConf.msgs.button || groupConf.msgs.link)) || "বাটন-লিংক / বিজ্ঞাপন দেওয়া নিষেধ!";
+                const bm = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${btnMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
+                if (bm) autoDel(chatId, bm.message_id, filterDeleteSec(groupConf));
+                return;
+            }
             // ১. ফরোয়ার্ড ব্লক (linked/allowed চ্যানেল ছাড়া সব ডিলিট)
             const isForwarded = Boolean(
                 msg.forward_from ||
@@ -1141,8 +1421,8 @@ groupBot.on("message", async (msg) => {
                 }
             }
 
-            // ৫. গালি ফিল্টার + warn/ban (FIX: mc/bc ekhon word-boundary)
-            const hasBadWord = containsBadWord(text);
+            // ৫. গালি ফিল্টার + warn/ban (custom list + default list)
+            const hasBadWord = containsBadWord(text, groupConf);
 
             if (hasBadWord) {
                 await delMsg(chatId, msgId);
@@ -1172,6 +1452,15 @@ groupBot.on("message", async (msg) => {
                     const m = await groupBot.sendMessage(chatId, `⚠️ <b>${atName}</b>, ${base} সতর্কতা <b>(${curWarns}/${limit})</b>।`, { parse_mode: "HTML" });
                     autoDel(chatId, m.message_id, warnDeleteSec(groupConf));
                 }
+                // Gali DM → admin দের full detail (ke ki bollo)
+                try {
+                    if (cfgBool(groupConf, "galiDmOn", true)) {
+                        const short = text.slice(0, 300);
+                        const acted = curWarns >= limit ? (action === "mute" ? "1h mute" : action === "warn" ? "last warn" : "ban") : `warn ${curWarns}/${limit}`;
+                        await dmAdmins(chatId, groupConf,
+                            `🚨 <b>Gali Alert</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n⚠️ Action: <b>${acted}</b>`);
+                    }
+                } catch (e) {}
                 return;
             }
         }
@@ -1265,7 +1554,7 @@ groupBot.on("callback_query", async (query) => {
 
             await groupBot.editMessageReplyMarkup({
                 inline_keyboard: [
-                    [{ text: `🎉 Join Giveaway [${participants.length}]`, callback_data: `giveaway_join:${giveawayId}` }]
+                    [{ text: `🎉 Join (${participants.length})`, callback_data: `giveaway_join:${giveawayId}` }]
                 ]
             }, { chat_id: chatId, message_id: query.message.message_id }).catch(() => {});
             return;

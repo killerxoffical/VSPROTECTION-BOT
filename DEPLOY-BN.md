@@ -145,3 +145,26 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
    - Free Render sleep = prothom reply te 30-50s lag normal.
 4. **Panel button kaj na korle:** Dashboard → **🔍 Diagnostics → Run check**. Server Offline = Step 1 URL; Database "RULES publish koro" = Firestore Rules e firestore.rules paste + Publish; Groups 0 = claim/auto-link + Refresh.
 5. **Vul bot test korcho na to?** Panel e + diye connect kora nijer bot add korle sudhu OI bot kaj korbe — shared bot (@Vareonprotection_bot) add korle claim CODE lage.
+
+## O. Manual gali list + per-section Save + anti-bot/ads (2026-10-11)
+- **Trigger Gap:** cooldown mane — ekoi user ekoi keyword e koto sec por por reply pabe (0 = sobsomoy). Triggers tab e label + alada Save.
+- **Proti section e alada Save:** Filters / Flood / Gali / Scammer / Welcome / Triggers / Messages / Trackers — jar ta bodlabe sudhu seita Save (Save All o ache).
+- **Anti-gali manual:** Gali tab e nijer word list (comma/newline) + "Default list" toggle. Toggle OFF = sudhu tomar list, auto kichu na.
+- **Ad-bot block:** Filters e **Anti-Bot** (auto-join bot der message delete) + **Anti-Button** (URL-button soho ad delete + custom warn text) — ON thakle kono ad/bot-promo jabe na.
+
+## P. Full gali list 138 + bypass-proof (2026-10-11)
+- **Manual-only gali (default auto OFF):** notun group e built-in list OFF + custom খালি — Gali tab e nijer list paste + Save। Toggle ON korle built-in (185) o cholbe.
+
+## R. Admin gali fun-reply + live/gali DM + group giveaway (2026-10-11)
+- **Admin gali → মজার reply, NO delete/ban/warn:** Gali tab e নিজের reply text (`{name}` চলে), default funny text built-in।
+- **🔴 Live → admin DM:** keu live/voice-chat শুরু করলে group e কিছু post হয় না — notify admin দের bot DM দেয় (কে live করছে + group)।
+- **🚨 Gali → admin DM:** ke gali dilo full detail (নাম/ID/group/লেখা/warn/action) admin DM এ।
+- **Admin ID:** command chalano admin auto-jome (Trackers tab e দেখা/edit করা যায়)। DM পেতে admin কে bot e **/start** দিতে হবে।
+- **🎉 Giveaway সবার জন্য:** top nav + group panel-এ Giveaway tab (photo/desc/auto-timer সহ) — super-only না।
+## Q. Auto 150+ Bangla/Banglish + 3-mode + group commands + premium giveaway (2026-10-11)
+- **Auto list 250+ Bangla/Banglish:** haramkhor, bejonma, jaroj, beyadob, dhokabaz, bhondo, gunda, mastan, dakat, betichod, shala, abal, chor, marbo + 100 Bangla script — bypass-proof, false-positive safe (class/magic/chorus/beta-version e dhorbe na)।
+- **3 mode:** ① duToi OFF = filter bondho ② Built-in ON = auto ③ Custom = manual ④ duToi eksathe — Gali tab theke।
+- **Group commands (panel khola lage na):** reply diye `/ban /kick /mute /warn`, reply/ID diye `/unscammer /unban /unmute /warns` — sudhu admin।
+- **Premium giveaway:** photo + description + auto-end timer (hours) + live Join count + pin + premium result — restart hole manual End।
+- **Bypass trick auto-ধরা:** f.u.c.k, phuck, fuuuck, b!tch, b0k4ch0d4, মাদার*চোদ — symbol/leet/repeat normalize kore match.
+- Manual mode chaile Gali tab er custom field e nijer list paste koro + Default OFF.
