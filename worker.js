@@ -186,17 +186,79 @@ function buildWelcome(gw, name) {
     ]));
     return { text, img, buttons };
 }
+// Per-group welcome resolver: mode=off -> null | custom(+msg) -> group text | global -> global text
+async function resolveWelcome(chatId, gConf, name) {
+    const mode = (gConf && gConf.welcomeMode) || "global";
+    if (mode === "off") return null;
+    if (mode === "custom" && gConf && gConf.welcomeMsg && String(gConf.welcomeMsg).trim()) {
+        const gw = await getGlobalWelcome();
+        const text = String(gConf.welcomeMsg).replace(/\{name\}/g, name || "Member");
+        const img = gConf.welcomeImg || gw.welcomeImg || WELCOME_IMG;
+        const links = (Array.isArray(gw.joinLinks) && gw.joinLinks.length) ? gw.joinLinks : [];
+        const buttons = links.filter((b) => b && b.url).slice(0, 8).map((b) => ([
+            { text: String(b.text || "Join").slice(0, 60), url: String(b.url) }
+        ]));
+        return { text, img, buttons, deleteSec: cfgNum(gConf, "welcomeDeleteSec", 10, 0, 300) };
+    }
+    const gw = await getGlobalWelcome();
+    if (gw.welcomeOn === false) return null;
+    const w = buildWelcome(gw, name);
+    return { ...w, deleteSec: cfgNum(gConf, "welcomeDeleteSec", 10, 0, 300) };
+}
 
 app.post("/api/tg/test-welcome", async (req, res) => {
     const { chatId } = req.body;
     if (!chatId) return res.status(400).json({ ok: false, error: "Group ID দিন" });
     try {
-        const gw = await getGlobalWelcome();
-        const w = buildWelcome(gw, "Test User");
+        let gConf = {};
+        try {
+            const gd = await db.collection("tg_groups").doc(chatId.toString()).get();
+            if (gd.exists) gConf = gd.data() || {};
+        } catch (e) {}
+        const w = await resolveWelcome(chatId.toString(), gConf, "Test User");
+        if (!w) return res.status(400).json({ ok: false, error: "Welcome OFF আছে (group/global)" });
         const opts = { caption: w.text, parse_mode: "HTML" };
         if (w.buttons.length) opts.reply_markup = { inline_keyboard: w.buttons };
-        await groupBot.sendPhoto(chatId.toString(), w.img, opts);
+        try {
+            await groupBot.sendPhoto(chatId.toString(), w.img, opts);
+        } catch (e) {
+            const topts = { parse_mode: "HTML" };
+            if (w.buttons.length) topts.reply_markup = { inline_keyboard: w.buttons };
+            await groupBot.sendMessage(chatId.toString(), w.text, topts);
+        }
         return res.json({ ok: true, message: "Welcome preview পাঠানো হয়েছে!" });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// Admin -> bot diye group/user ke message (panel Send box)
+app.post("/api/tg/send-message", async (req, res) => {
+    const { chatId, text, userId, replyTo } = req.body;
+    if (!chatId || !text) return res.status(400).json({ ok: false, error: "chatId + text দিন" });
+    try {
+        const opts = { parse_mode: "HTML", disable_web_page_preview: true };
+        if (replyTo) opts.reply_to_message_id = Number(replyTo);
+        let body = String(text).slice(0, 3500);
+        if (userId) body = `<a href="tg://user?id=${userId}">👤</a> ` + body;
+        const sent = await groupBot.sendMessage(chatId.toString(), body, opts).catch(async () => {
+            const retry = {};
+            if (replyTo) retry.reply_to_message_id = Number(replyTo);
+            return groupBot.sendMessage(chatId.toString(), String(text).slice(0, 3500), retry);
+        });
+        return res.json({ ok: true, message: "পাঠানো হয়েছে!", messageId: sent ? sent.message_id : null });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// Panel theke warn clear (rules client-delete dey na, tai bot API diye)
+app.post("/api/tg/clear-warn", async (req, res) => {
+    const { chatId, userId } = req.body;
+    if (!chatId || !userId) return res.status(400).json({ ok: false, error: "chatId + userId দিন" });
+    try {
+        await clearWarn(chatId.toString(), userId.toString());
+        return res.json({ ok: true, message: "Warn clear!" });
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
     }
@@ -419,6 +481,70 @@ async function getFreshOwner(chatId, cachedConf) {
     return "";
 }
 
+// ---------------- 8b. PER-GROUP CONFIG DEFAULTS (panel theke sob customize) ----------------
+// Purono group e notun field na thakleo default diye cholbe — backward compatible.
+const CFG_DEFAULTS = {
+    filterDeleteSec: 4,   // link/forward/video/inbox/flood warn koto sec por auto-delete
+    warnDeleteSec: 5,     // gali warn koto sec por auto-delete
+    floodOn: true, floodLimit: 6, floodWindowSec: 10, floodMuteCount: 10, floodMuteMin: 10,
+    floodMsg: "এত দ্রুত মেসেজ পাঠাবেন না! (Flood control)",
+    scammerAlertOn: true, scammerMsg: "",
+    nameTrackOn: true, leaveLogOn: true,
+    welcomeMode: "global", welcomeMsg: "", welcomeImg: "", welcomeDeleteSec: 10,
+    trigCooldownSec: 15
+};
+function cfgNum(conf, key, def, min, max) {
+    const v = Number(conf ? conf[key] : undefined);
+    if (!isFinite(v)) return def;
+    return Math.min(max, Math.max(min, Math.floor(v)));
+}
+function cfgBool(conf, key, def) {
+    if (!conf || typeof conf[key] === "undefined" || conf[key] === null) return def;
+    return conf[key] === true || conf[key] === "true" || conf[key] === 1;
+}
+function cfgStr(conf, key, def) {
+    const v = conf && conf[key] !== undefined && conf[key] !== null ? String(conf[key]) : "";
+    return v !== "" ? v : def;
+}
+function filterDeleteSec(conf) { return cfgNum(conf, "filterDeleteSec", CFG_DEFAULTS.filterDeleteSec, 0, 300); }
+function warnDeleteSec(conf) { return cfgNum(conf, "warnDeleteSec", CFG_DEFAULTS.warnDeleteSec, 0, 300); }
+function autoDel(chatId, messageId, sec) {
+    if (!sec || sec <= 0 || !messageId) return;
+    setTimeout(() => groupBot.deleteMessage(chatId, messageId).catch(() => {}), sec * 1000);
+}
+// Default scammer alert (Bangla + English) — panel theke scammerMsg dile oita cholbe
+function buildScammerAlert(conf, name, userId) {
+    const custom = conf && conf.scammerMsg ? String(conf.scammerMsg).trim() : "";
+    const safeName = name || userId;
+    if (custom) {
+        return custom.split("{name}").join(safeName).split("{id}").join(String(userId));
+    }
+    return `🚨 <b>SCAMMER ALERT!</b>\n\n` +
+        `⚠️ <a href="tg://user?id=${userId}">${safeName}</a> (<code>${userId}</code>) <b>একজন প্রমাণিত প্রতারক / স্ক্যামার!</b>\n` +
+        `❌ এই ইউজারের সাথে কেউ কোনো প্রকার লেনদেন করবেন না!\n\n` +
+        `<i>⚠️ This user is a proven scammer. Do NOT deal with them!</i>`;
+}
+// Name-change alert — always English (auto, fixed format)
+function buildNameChangeAlert(name, userId, oldName, oldUsername, newUsername) {
+    return `🔄 <b>Profile Updated</b>\n\n` +
+        `👤 <b>User:</b> <a href="tg://user?id=${userId}">${name}</a> (<code>${userId}</code>)\n` +
+        `📝 <b>Old name:</b> <code>${oldName || "-"}</code> ➔ <b>New:</b> <code>${name}</code>\n` +
+        `🔖 <b>Old username:</b> <code>${oldUsername || "-"}</code> ➔ <b>New:</b> <code>${newUsername}</code>`;
+}
+// Member directory: join kora sob user er chat id collect (admin pore bot diye message dite parbe)
+async function trackMember(chatId, userId, name, username, ownerUid) {
+    if (!userId || String(userId) === String(chatId)) return;
+    try {
+        await db.collection("tg_members").doc(`${chatId}_${userId}`).set({
+            chatId: String(chatId), userId: String(userId),
+            name: name || "", username: username || "",
+            ownerUid: ownerUid || "",
+            msgCount: admin.firestore.FieldValue.increment(1),
+            lastSeen: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+    } catch (e) {}
+}
+
 // গ্রুপে বট অ্যাড হলেই স্বয়ংক্রিয় রেজিস্টার (default protection ON)
 groupBot.on("my_chat_member", async (msg) => {
     try {
@@ -440,6 +566,11 @@ groupBot.on("my_chat_member", async (msg) => {
                 antiVideo: false,
                 antiForward: true,
                 antiInbox: true,
+                filterDeleteSec: 4,
+                warnDeleteSec: 5,
+                floodOn: true, floodLimit: 6, floodWindowSec: 10, floodMuteCount: 10, floodMuteMin: 10,
+                scammerAlertOn: true, nameTrackOn: true, leaveLogOn: true,
+                welcomeMode: "global", welcomeDeleteSec: 10, trigCooldownSec: 15,
                 lastActive: admin.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
             console.log("[VS] New group registered:", chat.title, chat.id.toString());
@@ -557,11 +688,12 @@ groupBot.on("message", async (msg) => {
 
         if (groupConf && groupConf.triggers && groupConf.triggers.length > 0 && text) {
             const cleanUserText = text.toLowerCase().trim();
+            const trigCoolSec = cfgNum(groupConf, "trigCooldownSec", 15, 0, 300);
             for (const trig of groupConf.triggers) {
                 const kw = (trig.keyword || "").toLowerCase().trim();
                 if (kw && (cleanUserText.includes(kw) || cleanUserText === kw)) {
                     const ck = chatId + ":" + userId + ":" + kw;
-                    if (Date.now() - (trigCool.get(ck) || 0) < 15000) continue;
+                    if (trigCoolSec > 0 && Date.now() - (trigCool.get(ck) || 0) < trigCoolSec * 1000) continue;
                     trigCool.set(ck, Date.now());
                     if (trigCool.size > 4000) trigCool.clear();
 
@@ -612,6 +744,21 @@ groupBot.on("message", async (msg) => {
             lastActive: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true }).catch(() => {});
 
+        // Member directory: sob sender er chat id collect (panel Send box er jonno)
+        trackMember(chatId, fromUser.id.toString(), currentName, currentUsername, groupConf.ownerUid || "").catch(() => {});
+
+        // Leave log (customize: leaveLogOn)
+        if (msg.left_chat_member) {
+            try {
+                const lv = msg.left_chat_member;
+                if (!lv.is_bot && cfgBool(groupConf, "leaveLogOn", true)) {
+                    const lvName = `${lv.first_name || ""} ${lv.last_name || ""}`.trim() || "A member";
+                    await groupBot.sendMessage(chatId, `👋 <b>${lvName}</b> left the group.`, { parse_mode: "HTML" }).catch(() => {});
+                }
+            } catch (e) {}
+            return;
+        }
+
         const isAdmin = await isGroupAdmin(chatId, fromUser, msg);
 
         // Diagnostic: /id — group + user ID (sobai, bot alive proof)
@@ -651,7 +798,7 @@ groupBot.on("message", async (msg) => {
         if (isCommand(text, "/claim")) {
             if (!isAdmin) {
                 const w = await groupBot.sendMessage(chatId, `⚠️ এই কমান্ড কেবল গ্রুপ এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId });
-                setTimeout(() => groupBot.deleteMessage(chatId, w.message_id).catch(() => {}), 5000);
+                autoDel(chatId, w.message_id, warnDeleteSec(groupConf));
                 return;
             }
             const code = parseClaimCode(text);
@@ -676,6 +823,21 @@ groupBot.on("message", async (msg) => {
                 await gRef.set({ ownerUid: ownerUid, claimedAt: admin.firestore.FieldValue.serverTimestamp(), claimedBy: fromUser.id.toString() }, { merge: true });
                 groupConfigs.delete(chatId);
                 groupAdminCache.delete(chatId);
+                // purono members/warns e ownerUid backfill (panel e dekha jabe)
+                (async () => {
+                    try {
+                        const ms = await db.collection("tg_members").where("chatId", "==", chatId).limit(400).get();
+                        const batch = db.batch();
+                        ms.forEach((d) => batch.set(d.ref, { ownerUid: ownerUid }, { merge: true }));
+                        await batch.commit().catch(() => {});
+                    } catch (e) {}
+                    try {
+                        const ws = await db.collection("tg_warns").where("chatId", "==", chatId).limit(200).get();
+                        const b2 = db.batch();
+                        ws.forEach((d) => b2.set(d.ref, { ownerUid: ownerUid }, { merge: true }));
+                        await b2.commit().catch(() => {});
+                    } catch (e) {}
+                })();
                 await groupBot.sendMessage(chatId, `✅ গ্রুপ link done! এখন panel থেকে manage করতে পারবেন।\n🆔 <code>${chatId}</code> → Panel e <b>My Groups</b> e Refresh দিন।`, { parse_mode: "HTML", reply_to_message_id: msgId });
             } catch (e) {
                 await groupBot.sendMessage(chatId, `❌ Claim failed, pore abar try korun।`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
@@ -687,7 +849,7 @@ groupBot.on("message", async (msg) => {
         if (isCommand(text, "/scammer") || isCommand(text, "/unscammer")) {
             if (!isAdmin) {
                 const warn = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, এই কমান্ড কেবল এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId });
-                setTimeout(() => groupBot.deleteMessage(chatId, warn.message_id).catch(() => {}), 5000);
+                autoDel(chatId, warn.message_id, warnDeleteSec(groupConf));
                 return;
             }
 
@@ -713,69 +875,68 @@ groupBot.on("message", async (msg) => {
             return;
         }
 
-        // Name Change Tracker + Scammer Alert (admin + member sobar jonno)
+        // Name Change Tracker (English auto) + Scammer Alert (admin + member sobar jonno)
         try {
-            const userDocRef0 = db.collection("tg_user_history").doc(userId);
-            const userSnap0 = await userDocRef0.get();
-            if (userSnap0.exists) {
-                const oldData = userSnap0.data() || {};
-                const oldName = oldData.name || "";
-                const oldUsername = oldData.username || "";
-                if (oldName !== currentName || oldUsername !== currentUsername) {
-                    const changeAlert =
-                        `🔄 <b>User Profile Changed!</b>\n\n` +
-                        `👤 <b>User:</b> <a href="tg://user?id=${userId}">${currentName}</a> (<code>${userId}</code>)\n` +
-                        `📝 <b>Name:</b> <code>${oldName}</code> ➔ <code>${currentName}</code>\n` +
-                        `🔖 <b>Username:</b> <code>${oldUsername}</code> ➔ <code>${currentUsername}</code>`;
-                    await groupBot.sendMessage(chatId, changeAlert, { parse_mode: "HTML" }).catch(() => {});
+            if (cfgBool(groupConf, "nameTrackOn", true)) {
+                const userDocRef0 = db.collection("tg_user_history").doc(userId);
+                const userSnap0 = await userDocRef0.get();
+                if (userSnap0.exists) {
+                    const oldData = userSnap0.data() || {};
+                    const oldName = oldData.name || "";
+                    const oldUsername = oldData.username || "";
+                    if (oldName !== currentName || oldUsername !== currentUsername) {
+                        await groupBot.sendMessage(chatId, buildNameChangeAlert(currentName, userId, oldName, oldUsername, currentUsername), { parse_mode: "HTML" }).catch(() => {});
+                        await userDocRef0.set({
+                            name: currentName,
+                            username: currentUsername,
+                            previousNames: admin.firestore.FieldValue.arrayUnion({ name: oldName, username: oldUsername, at: new Date() })
+                        }, { merge: true });
+                    }
+                } else {
                     await userDocRef0.set({
-                        name: currentName,
-                        username: currentUsername,
-                        previousNames: admin.firestore.FieldValue.arrayUnion({ name: oldName, username: oldUsername, at: new Date() })
-                    }, { merge: true });
+                        userId: userId, name: currentName, username: currentUsername, createdAt: admin.firestore.FieldValue.serverTimestamp()
+                    }).catch(() => {});
                 }
-            } else {
-                await userDocRef0.set({
-                    userId: userId, name: currentName, username: currentUsername, createdAt: admin.firestore.FieldValue.serverTimestamp()
-                }).catch(() => {});
             }
-            const scamSnap0 = await db.collection("tg_scammers").doc(userId).get().catch(() => null);
-            if (scamSnap0 && scamSnap0.exists && scamSnap0.data().isScammer) {
-                const scammerWarning =
-                    `🚨 <b>SCAMMER ALERT!</b>\n\n` +
-                    `⚠️ <a href="tg://user?id=${userId}">${currentName}</a> (<code>${userId}</code>) <b>একজন প্রমাণিত প্রতারক / স্ক্যামার!</b>\n` +
-                    `❌ এই ইউজারের সাথে কেউ কোনো প্রকার লেনদেন করবেন না!`;
-                await groupBot.sendMessage(chatId, scammerWarning, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+            if (cfgBool(groupConf, "scammerAlertOn", true)) {
+                const scamSnap0 = await db.collection("tg_scammers").doc(userId).get().catch(() => null);
+                if (scamSnap0 && scamSnap0.exists && scamSnap0.data().isScammer) {
+                    await groupBot.sendMessage(chatId, buildScammerAlert(groupConf, currentName, userId), { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                }
             }
         } catch (e) {}
 
         // এডমিন মেসেজে কোনো ফিল্টার চলবে না (command/tracker sesh, ekhon return)
         if (isAdmin) return;
 
-        // ০. ফ্লাড কন্ট্রোল (১০ সেকেন্ডে ৬+ = ডিলিট + ওয়ার্ন, ১০+ = ১০ মিনিট মিউট)
+        // ০. ফ্লাড কন্ট্রোল (customize: floodOn/Limit/Window/Mute + msg + delete-sec)
         // Anonymous admin (sender_chat) ke flood e dhorbe na
-        if (!isAnonymousAdmin && !msg.sender_chat) {
+        if (cfgBool(groupConf, "floodOn", true) && !isAnonymousAdmin && !msg.sender_chat) {
+            const fWin = cfgNum(groupConf, "floodWindowSec", 10, 3, 120) * 1000;
+            const fLim = cfgNum(groupConf, "floodLimit", 6, 2, 50);
+            const fMuteAt = cfgNum(groupConf, "floodMuteCount", 10, 3, 100);
+            const fMuteMin = cfgNum(groupConf, "floodMuteMin", 10, 1, 1440);
             const fk = chatId + ":" + userId;
             const nowT = Date.now();
             let farr = floodMap.get(fk) || [];
-            farr = farr.filter((t) => nowT - t < 10000);
+            farr = farr.filter((t) => nowT - t < fWin);
             farr.push(nowT);
             floodMap.set(fk, farr);
             if (floodMap.size > 4000) floodMap.clear();
-            if (farr.length > 6) {
+            if (farr.length > fLim) {
                 floodMap.set(fk, []);
                 await groupBot.deleteMessage(chatId, msgId).catch(() => {});
-                if (farr.length > 10) {
+                if (farr.length > fMuteAt) {
                     try {
                         await groupBot.restrictChatMember(chatId, fromUser.id, {
                             permissions: { can_send_messages: false },
-                            until_date: Math.floor(Date.now() / 1000) + 600
+                            until_date: Math.floor(Date.now() / 1000) + fMuteMin * 60
                         });
                     } catch (e) {}
                 }
-                const flMsg = `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, এত দ্রুত মেসেজ পাঠাবেন না! (Flood control)`;
+                const flMsg = `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${cfgStr(groupConf, "floodMsg", CFG_DEFAULTS.floodMsg)}`;
                 const fm = await groupBot.sendMessage(chatId, flMsg, { parse_mode: "HTML" }).catch(() => null);
-                if (fm) setTimeout(() => groupBot.deleteMessage(chatId, fm.message_id).catch(() => {}), 4000);
+                if (fm) autoDel(chatId, fm.message_id, filterDeleteSec(groupConf));
                 return;
             }
         }
@@ -814,7 +975,7 @@ groupBot.on("message", async (msg) => {
                 await groupBot.deleteMessage(chatId, msgId).catch(() => {});
                 const fwdMsg = (groupConf.msgs && groupConf.msgs.forward) || "অন্য কোনো চ্যানেল, গ্রুপ বা ইনবক্স থেকে শেয়ার বা ফরোয়ার্ড করা সম্পূর্ণ নিষেধ!";
                 const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${fwdMsg}`, { parse_mode: "HTML" });
-                setTimeout(() => groupBot.deleteMessage(chatId, m.message_id).catch(() => {}), 4000);
+                autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                 return;
             }
 
@@ -823,7 +984,7 @@ groupBot.on("message", async (msg) => {
                 await groupBot.deleteMessage(chatId, msgId).catch(() => {});
                 const vidMsg = (groupConf.msgs && groupConf.msgs.video) || "গ্রুপে ভিডিও পাঠানো নিষেধ!";
                 const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${vidMsg}`, { parse_mode: "HTML" });
-                setTimeout(() => groupBot.deleteMessage(chatId, m.message_id).catch(() => {}), 4000);
+                autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                 return;
             }
 
@@ -832,7 +993,7 @@ groupBot.on("message", async (msg) => {
                 await groupBot.deleteMessage(chatId, msgId).catch(() => {});
                 const ibMsg = (groupConf.msgs && groupConf.msgs.inbox) || "গ্রুপে ইনবক্সে ডাকার চেষ্টা করবেন না! সব কথা গ্রুপেই বলুন।";
                 const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${ibMsg}`, { parse_mode: "HTML" });
-                setTimeout(() => groupBot.deleteMessage(chatId, m.message_id).catch(() => {}), 4000);
+                autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                 return;
             }
 
@@ -846,7 +1007,7 @@ groupBot.on("message", async (msg) => {
                     await groupBot.deleteMessage(chatId, msgId).catch(() => {});
                     const linkMsg = (groupConf.msgs && groupConf.msgs.link) || "অননুমোদিত লিংক দেওয়া নিষেধ!";
                     const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${linkMsg}`, { parse_mode: "HTML" });
-                    setTimeout(() => groupBot.deleteMessage(chatId, m.message_id).catch(() => {}), 4000);
+                    autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
                     return;
                 }
             }
@@ -880,7 +1041,7 @@ groupBot.on("message", async (msg) => {
                 } else {
                     const base = groupConf.warnMsg || "ভদ্র ভাষা ব্যবহার করুন!";
                     const m = await groupBot.sendMessage(chatId, `⚠️ <b>${atName}</b>, ${base} সতর্কতা <b>(${curWarns}/${limit})</b>।`, { parse_mode: "HTML" });
-                    setTimeout(() => groupBot.deleteMessage(chatId, m.message_id).catch(() => {}), 5000);
+                    autoDel(chatId, m.message_id, warnDeleteSec(groupConf));
                 }
                 return;
             }
@@ -910,8 +1071,6 @@ groupBot.on("new_chat_members", async (msg) => {
                 groupConfigs.set(chatId, gConf);
             } catch (e) { gConf = {}; }
         }
-        const gw = await getGlobalWelcome();
-        if (gw.welcomeOn === false) return;
 
         for (const user of newMembers) {
             if (user.is_bot) continue;
@@ -920,8 +1079,12 @@ groupBot.on("new_chat_members", async (msg) => {
                 const me = await groupBot.getMe().catch(() => null);
                 if (me && user.id === me.id) continue;
             } catch (e) {}
+            // join kora user er id collect (Send box er jonno)
+            trackMember(chatId, String(user.id), user.first_name || "Member",
+                user.username ? `@${user.username}` : "None", (gConf && gConf.ownerUid) || "").catch(() => {});
             const name = user.first_name || "Member";
-            const w = buildWelcome(gw, name);
+            const w = await resolveWelcome(chatId, gConf, name);
+            if (!w) continue;
 
             const photoOpts = { caption: w.text, parse_mode: "HTML" };
             if (w.buttons.length) photoOpts.reply_markup = { inline_keyboard: w.buttons };
@@ -934,7 +1097,7 @@ groupBot.on("new_chat_members", async (msg) => {
 
             if (sentWelcome) {
                 lastWelcomeMessages.set(chatId, sentWelcome.message_id);
-                setTimeout(() => groupBot.deleteMessage(chatId, sentWelcome.message_id).catch(() => {}), 10000);
+                autoDel(chatId, sentWelcome.message_id, w.deleteSec);
             }
         }
     } catch (e) {}

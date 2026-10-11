@@ -104,3 +104,12 @@ Sadharon user: shudhu nijer claimed group + settings + triggers + warns.
 5. **Anti-link default:** age default whitelist e `ppmod` chilo → ekhon khali = sob link block (nijer ta whitelist e likho).
 6. **Panel:** UID copy + 🔄 Refresh + Bot API URL sobar jonno + Welcome/Trigger Test button + Timestamp sort fix + duplicate apiBase ID fix.
 7. **Redeploy:** ei fix er por GitHub push → Render auto-redeploy → Logs e `[VS] Bot connected as @...` ashle group e `/id` likhe test koro.
+
+## K. v3.0 Executive Console — full customization (2026-10-11)
+- **Panel ekhon sidebar console** (screenshot style): Dashboard / My Groups / Members / Scammers / Welcome / Giveaway / Send Message / Broadcast / Help.
+- **Dashboard:** stat cards (Groups, Members, Warns, Scammers) + Group Activity chart (members vs warns) + Claim Code / Claim Command alada card.
+- **Group e tap → full admin panel:** filters, delete-timing (filter/warn sec), flood (on/limit/window/mute/msg), gali (limit/action/msg), custom warning texts (link/forward/video/inbox), per-group Welcome (global/custom/off + photo + delete-sec), Scammer alert (on/off + custom {name}/{id}, khali = Bangla+English default), trackers (name-change English auto + leave log), triggers + cooldown, members, warns (clear), Save All.
+- **Members auto-collect:** bot group e je likhe/join kore tar ID `tg_members` e jome — Send box diye bot oi group e take mention-msg dite pare.
+- **Notun bot API:** `POST /api/tg/send-message` {chatId, text, userId?}, `POST /api/tg/clear-warn` {chatId, userId}.
+- **IMPORTANT:** `firestore.rules` e `tg_members` block notun — Rules **re-publish** na korle Members/Send kaj korbe na!
+- Backward compatible: purono group e notun field na thakle default (age jemon cholto temon) cholbe.

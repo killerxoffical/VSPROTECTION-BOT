@@ -48,6 +48,12 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // members directory: bot sob sender er id collect kore (ownerUid denormalized, bot likhe)
+    match /tg_members/{mid} {
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
     // scammer registry: global — sob login user dekhbe, change shudhu bot/super
     match /tg_scammers/{userId} {
       allow read: if signedIn();
