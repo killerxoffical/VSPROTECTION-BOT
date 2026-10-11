@@ -181,3 +181,4 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 ## U. Fake staff-title decline (2026-10-11)
 - Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → message decline (delete + custom warn)।
 - Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + delete-sec (0 = notice kokhono delete hobe na, thakbe)। Real admin/channel exempt।
+- Offender message by default THAKE (delete হয় না) + warn নিচে reply thread-এ আসে। চাইলে "Offender message o delete" toggle ON করো।

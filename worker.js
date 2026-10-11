@@ -981,6 +981,7 @@ groupBot.on("my_chat_member", async (msg) => {
                 customTitles: [],
                 fakeTitleMsg: "",
                 fakeTitleDeleteSec: 0,
+                fakeTitleDelete: false,
                 useDefaultBadWords: false,
                 customBadWords: [],
                 filterDeleteSec: 4,
@@ -1517,17 +1518,18 @@ groupBot.on("message", async (msg) => {
                 return;
             }
             // ০.৭ Fake staff-title block (name/username e owner-admin-moderator,
-            // kintu real admin na → decline; real admin exempt)
+            // kintu real admin na → reply warn; offender message by default THAKBE)
             if (cfgBool(groupConf, "fakeTitleOn", true)) {
                 const hit = fakeTitleHit(currentName, currentUsername, groupConf);
                 if (hit) {
-                    await delMsg(chatId, msgId);
+                    // age delete korle reply thread ভাঙে — tai age reply, delete (chaile) pore
                     const tpl = (groupConf.fakeTitleMsg || "").trim() ||
                         `🚫 <b>{name}</b> — "<b>{title}</b>" নামে ভান করে লাভ নেই! তুমি এই group এর admin/staff নও। আসল পরিচয়ে কথা বলো।`;
                     const body = tpl.split("{title}").join(cleanName(hit)).split("{id}").join(String(userId)).split("{name}").join(cleanName(currentName));
                     const dm = await groupBot.sendMessage(chatId, body, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(async () => {
                         return groupBot.sendMessage(chatId, body.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => null);
                     });
+                    if (cfgBool(groupConf, "fakeTitleDelete", false)) await delMsg(chatId, msgId);
                     const ds = cfgNum(groupConf, "fakeTitleDeleteSec", 0, 0, 300);
                     if (dm) autoDel(chatId, dm.message_id, ds);
                     return;
