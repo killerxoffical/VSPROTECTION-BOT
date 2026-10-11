@@ -222,31 +222,62 @@ function normAbuse(s) {
 function leetMap(s) {
     return String(s || "").toLowerCase().replace(/[0134578@$]/g, (c) => ({ "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "@": "a", "$": "s" }[c]));
 }
-let normBadCache = null;
+let normBadCache = null; // [{raw, norm}] — matched word দেখানোর জন্য raw রাখা হয়
+function getNormBad() {
+    if (!normBadCache) normBadCache = REAL_BAD_WORDS.map((w) => ({ raw: String(w), norm: normAbuse(w) }));
+    return normBadCache;
+}
+// Full message theke KON word ta match korlo — admin DM/log e mention হয়
+function findBadWord(text, conf) {
+    const t = (text || "").toLowerCase();
+    if (!t) return "";
+    let skip = null;
+    try {
+        const dl = conf && conf.disabledBadWords;
+        if (Array.isArray(dl) && dl.length) skip = new Set(dl.map((x) => normAbuse(String(x || "").trim())).filter(Boolean));
+    } catch (e) {}
+    for (const b of BOUNDARY_BAD_WORDS) {
+        if (skip && skip.has(normAbuse(b))) continue;
+        if (wordBoundary(t, b) || wordBoundary(leetMap(t), b)) return b;
+    }
+    const nText = normAbuse(t);
+    if (!nText) return "";
+    // Disabled word যে span cover করে, সেখানে কোনো match নয় (overlap হলেই বাদ)
+    // (e.g. "খানকি" OFF → "খানকির পোলা"-তেও ধরবে না; কিন্তু আলাদা "tui chod" ঠিকই ধরবে)
+    const spans = [];
+    if (skip) skip.forEach((s) => {
+        if (!s) return;
+        let i = -1;
+        while ((i = nText.indexOf(s, i + 1)) !== -1) spans.push([i, i + s.length]);
+    });
+    const covered = (idx, len) => spans.some(([a, b]) => idx < b && idx + len > a);
+    const findIn = (list) => {
+        for (const bad of (list || [])) {
+            const b = String(bad || "").trim();
+            if (!b || b.length < 2) continue;
+            const nb = normAbuse(b);
+            const ii = nText.indexOf(nb);
+            if (ii !== -1 && !covered(ii, nb.length)) return b;
+        }
+        return "";
+    };
+    const cm = findIn(conf && conf.customBadWords);
+    if (cm) return cm;
+    if (!conf || conf.useDefaultBadWords !== false) {
+        for (const e of getNormBad()) {
+            if (!e.norm) continue;
+            if (skip && skip.has(e.norm)) continue;
+            const ii = nText.indexOf(e.norm);
+            if (ii !== -1 && !covered(ii, e.norm.length)) return e.raw;
+        }
+    }
+    return "";
+}
+function containsBadWord(text, conf) { return !!findBadWord(text, conf); }
 // conf.customBadWords (panel থেকে MANUAL list) সবসময় চেক হয়।
 // Built-in auto list default ON — panel থেকে toggle OFF করলেই শুধু বন্ধ
 // (সম্পূর্ণ manual চাইলে custom list + toggle OFF)।
-function containsBadWord(text, conf) {
-    const t = (text || "").toLowerCase();
-    if (!t) return false;
-    for (const b of BOUNDARY_BAD_WORDS) { if (wordBoundary(t, b) || wordBoundary(leetMap(t), b)) return true; }
-    const nText = normAbuse(t);
-    if (!nText) return false;
-    const checkList = (list) => {
-        for (const bad of (list || [])) {
-            const b = String(bad || "").trim().toLowerCase();
-            if (!b || b.length < 2) continue;
-            if (nText.includes(normAbuse(b))) return true;
-        }
-        return false;
-    };
-    if (checkList(conf && conf.customBadWords)) return true;
-    if (!conf || conf.useDefaultBadWords !== false) {
-        if (!normBadCache) normBadCache = REAL_BAD_WORDS.map(normAbuse);
-        for (const nb of normBadCache) { if (nb && nText.includes(nb)) return true; }
-    }
-    return false;
-}
+// NOTE: আসল logic উপরের findBadWord — containsBadWord শুধু wrapper।
 // Inline URL-button আছে? (bot/ad রা message এর নিচে button-link দেয়)
 function hasUrlButton(msg) {
     try {
@@ -255,6 +286,15 @@ function hasUrlButton(msg) {
         return kb.some((row) => Array.isArray(row) && row.some((b) => b && b.url));
     } catch (e) { return false; }
 }
+
+// Built-in gali list — panel theke admin dekhbe + manage korbe (single source: server)
+app.post("/api/tg/badwords", async (req, res) => {
+    try {
+        return res.json({ ok: true, count: REAL_BAD_WORDS.length + BOUNDARY_BAD_WORDS.length, defaults: REAL_BAD_WORDS, boundary: BOUNDARY_BAD_WORDS });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
 
 // ---------------- 4. BROADCAST API ----------------
 app.post("/api/tg/group-broadcast", async (req, res) => {
@@ -2053,7 +2093,8 @@ groupBot.on("message", async (msg) => {
             }
 
             // ৫. গালি ফিল্টার + warn/ban (custom list + default list)
-            const hasBadWord = containsBadWord(text, groupConf);
+            const matchedWord = findBadWord(text, groupConf);
+            const hasBadWord = !!matchedWord;
 
             if (hasBadWord) {
                 await delMsg(chatId, msgId);
@@ -2062,13 +2103,14 @@ groupBot.on("message", async (msg) => {
                 let wOwner = await getFreshOwner(chatId, groupConf);
                 const curWarns = (await getWarnCount(chatId, userId)) + 1;
                 await setWarnCount(chatId, userId, curWarns, wOwner);
-                // Gali log — panel + admin DM theke pore dekha jabe (ke ki bollo)
+                // Gali log — panel + admin DM theke pore dekha jabe (ke ki bollo + matched word)
                 try {
                     await db.collection("tg_gali_log").add({
                         chatId, userId,
                         name: String(currentName || "").slice(0, 80),
                         username: String(currentUsername || "").slice(0, 40),
                         text: String(text || "").slice(0, 300),
+                        matched: String(matchedWord || "").slice(0, 60),
                         warns: curWarns, action,
                         ownerUid: wOwner || "",
                         createdAt: admin.firestore.FieldValue.serverTimestamp()
@@ -2096,13 +2138,13 @@ groupBot.on("message", async (msg) => {
                     const m = await groupBot.sendMessage(chatId, `⚠️ ${mention}, ${base} সতর্কতা <b>(${curWarns}/${limit})</b>।`, { parse_mode: "HTML" });
                     autoDel(chatId, m.message_id, warnDeleteSec(groupConf));
                 }
-                // Gali DM → admin দের full detail (ke ki bollo)
+                // Gali DM → admin দের full detail (ke ki bollo + KON word ধরলো)
                 try {
                     if (cfgBool(groupConf, "galiDmOn", true)) {
                         const short = text.slice(0, 300);
                         const acted = curWarns >= limit ? (action === "mute" ? "1h mute" : action === "warn" ? "last warn" : "ban") : `warn ${curWarns}/${limit}`;
                         await dmAdmins(chatId, groupConf,
-                            `🚨 <b>Gali Alert</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n⚠️ Action: <b>${acted}</b>`);
+                            `🚨 <b>Gali Alert</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n🎯 <b>Matched:</b> <code>${cleanName(matchedWord) || "-"}</code>\n⚠️ Action: <b>${acted}</b>`);
                     }
                 } catch (e) {}
                 return;

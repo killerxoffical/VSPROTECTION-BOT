@@ -200,3 +200,11 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **③ Member ID diye test** (admin exempt) + **bot Admin** (Delete/Ban) — permission na thakle bot group Ei janabe।
 - **Warn ekhon clickable mention** (নামে tap = profile) + delete age, reply pore।
 - **DM verify:** Trackers → ID bosao → **📨 Test DM** (per-ID ✅/❌ + কারণ)। ID add hole bot auto **✅ Connected** DM পাঠায়। Fail = oi ID bot e **/start** দেয়নি।
+
+## X. Built-in gali list — dekho + per-word manage (2026-10-11)
+- Gali tab e **full live list** (server theke): search + count + word tap = OFF (লাল কাটা) / ON (সাদা) + Reset all ON।
+- OFF করা word bot ধরবে না, বাকি সব ধরবে। **Save Gali Settings** চাপলে apply। Custom words আলাদা box e আগের মতো।
+
+## Y. Admin DM + log e matched word (2026-10-11)
+- Gali DM + panel log e এখন **🎯 Matched: "word"** — full message er KON word-এ ধরলো mention সহ।
+- OFF করা word-এর family-ও ছাড় পায় (e.g. "খানকি" OFF → "খানকির পোলা"-তেও ধরবে না; আলাদা "chod" ঠিকই ধরবে)।
