@@ -1338,7 +1338,7 @@ groupBot.on("my_chat_member", async (msg) => {
                 customTitles: [],
                 fakeTitleMsg: "",
                 fakeTitleDeleteSec: 0,
-                fakeTitleDelete: false,
+                fakeTitleDelete: true,
                 useDefaultBadWords: true,
                 customBadWords: [],
                 filterDeleteSec: 4,
@@ -1954,9 +1954,31 @@ groupBot.on("message", async (msg) => {
                     const dm = await groupBot.sendMessage(chatId, body, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(async () => {
                         return groupBot.sendMessage(chatId, body.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => null);
                     });
-                    if (cfgBool(groupConf, "fakeTitleDelete", false)) await delMsg(chatId, msgId);
+                    if (cfgBool(groupConf, "fakeTitleDelete", true)) await delMsg(chatId, msgId);
                     const ds = cfgNum(groupConf, "fakeTitleDeleteSec", 0, 0, 300);
                     if (dm) autoDel(chatId, dm.message_id, ds);
+                    // Fake-title DM + log — admin jante pare ke ki bollo, delete holo kina
+                    const fdel = cfgBool(groupConf, "fakeTitleDelete", true);
+                    try {
+                        if (cfgBool(groupConf, "galiDmOn", true)) {
+                            const short = String(text || "").slice(0, 300);
+                            await dmAdmins(chatId, groupConf,
+                                `🚫 <b>Fake-title decline</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n⚠️ Fake title: <b>${cleanName(hit)}</b> → ${fdel ? "deleted ✅" : "kept"}`);
+                        }
+                    } catch (e) {}
+                    try {
+                        let fOwner = groupConf.ownerUid || "";
+                        if (!fOwner) { try { const gd = await db.collection("tg_groups").doc(chatId).get(); fOwner = gd.exists ? (gd.data().ownerUid || "") : ""; } catch (e) {} }
+                        await db.collection("tg_gali_log").add({
+                            chatId, userId,
+                            name: String(currentName || "").slice(0, 80),
+                            username: String(currentUsername || "").slice(0, 40),
+                            text: String(text || "").slice(0, 300),
+                            warns: 0, action: "fake-title:" + String(hit || "").slice(0, 30),
+                            ownerUid: fOwner,
+                            createdAt: admin.firestore.FieldValue.serverTimestamp()
+                        });
+                    } catch (e) {}
                     return;
                 }
             }

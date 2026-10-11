@@ -179,8 +179,9 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Earning FAQ:** group e Telegram ad revenue nei (শুধু 1000+ subs channel)। Sponsor line/auto-DM blast চাইলে বলো — setting বানিয়ে দেব। Bot spam-ad দিলে Telegram ban — tai anti-ads default ON রাখো।
 
 ## U. Fake staff-title decline (2026-10-11)
-- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → message decline (custom warn, offender message THAKE)।
-- Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + delete-sec (0 = notice kokhono delete hobe na, thakbe)। Real admin/channel exempt। Warn নিচে reply thread-এ আসে। চাইলে "Offender message o delete" toggle ON করো।
+- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → offender message **DELETE** + warn নিচে reply thread-এ।
+- Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + notice delete-sec (0 = notice thakbe)। Real admin/channel exempt।
+- Fake-title decline ও **admin DM + gali log**-এ যায় (ke ki bollo, delete holo kina) — Mod-alert DM ON থাকলে। না চাইলে "Offender message o delete" toggle OFF করো।
 
 ## V. In-bot setup wizard — /panel menu bot-er vitor (2026-10-11)
 - **Link (kon bot-er admin bojhar jonno):** Panel → 🔗 Telegram Link → New Code → bot ke DM e `/link CODE` (one-time) → `/panel`। Panel e status + Unlink।
