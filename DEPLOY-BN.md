@@ -155,12 +155,6 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 ## P. Full gali list 138 + bypass-proof (2026-10-11)
 - **Manual-only gali (default auto OFF):** notun group e built-in list OFF + custom খালি — Gali tab e nijer list paste + Save। Toggle ON korle built-in (185) o cholbe.
 
-## R. Admin gali fun-reply + live/gali DM + group giveaway (2026-10-11)
-- **Admin gali → মজার reply, NO delete/ban/warn:** Gali tab e নিজের reply text (`{name}` চলে), default funny text built-in।
-- **🔴 Live → admin DM:** keu live/voice-chat শুরু করলে group e কিছু post হয় না — notify admin দের bot DM দেয় (কে live করছে + group)।
-- **🚨 Gali → admin DM:** ke gali dilo full detail (নাম/ID/group/লেখা/warn/action) admin DM এ।
-- **Admin ID:** command chalano admin auto-jome (Trackers tab e দেখা/edit করা যায়)। DM পেতে admin কে bot e **/start** দিতে হবে।
-- **🎉 Giveaway সবার জন্য:** top nav + group panel-এ Giveaway tab (photo/desc/auto-timer সহ) — super-only না।
 ## Q. Auto 150+ Bangla/Banglish + 3-mode + group commands + premium giveaway (2026-10-11)
 - **Auto list 250+ Bangla/Banglish:** haramkhor, bejonma, jaroj, beyadob, dhokabaz, bhondo, gunda, mastan, dakat, betichod, shala, abal, chor, marbo + 100 Bangla script — bypass-proof, false-positive safe (class/magic/chorus/beta-version e dhorbe na)।
 - **3 mode:** ① duToi OFF = filter bondho ② Built-in ON = auto ③ Custom = manual ④ duToi eksathe — Gali tab theke।
@@ -168,3 +162,22 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Premium giveaway:** photo + description + auto-end timer (hours) + live Join count + pin + premium result — restart hole manual End।
 - **Bypass trick auto-ধরা:** f.u.c.k, phuck, fuuuck, b!tch, b0k4ch0d4, মাদার*চোদ — symbol/leet/repeat normalize kore match.
 - Manual mode chaile Gali tab er custom field e nijer list paste koro + Default OFF.
+
+## R. Admin gali fun-reply + live/gali DM + group giveaway (2026-10-11)
+- **Admin gali → মজার reply, NO delete/ban/warn:** Gali tab e নিজের reply text (`{name}` চলে), default funny text built-in।
+- **🔴 Live → admin DM:** keu live/voice-chat শুরু করলে group e কিছু post হয় না — notify admin দের bot DM দেয় (কে live করছে + group)।
+- **🚨 Gali → admin DM:** ke gali dilo full detail (নাম/ID/group/লেখা/warn/action) admin DM এ।
+- **Admin ID:** command chalano admin auto-jome (Trackers tab e দেখা/edit করা যায়)। DM পেতে admin কে bot e **/start** দিতে হবে।
+- **🎉 Giveaway সবার জন্য:** top nav + group panel-এ Giveaway tab (photo/desc/auto-timer সহ) — super-only না।
+
+## S. Giveaway always-visible + earning ways (2026-10-11)
+- **Miss হবে না:** post auto-pin + প্রতি ঘণ্টায় live count/countdown refresh + silent re-pin (notification ছাড়া pin-bar এর উপরে)। Panel থেকে যেকোনো সময় **📌 Re-pin**। Join বাটনে live count।
+- **Earning:** ① Telegram Ads revenue (শুধু 1000+ subs public channel, Fragment/TON payout — group e দেয় না) ② নিজের sponsor deal (welcome/result এ sponsor line — চাইলে setting বানিয়ে দেব) ③ paid private group/invite। Bot অন্যের group e ad দিতে পারে না + spam করলে Telegram ban করে।
+
+## T. Giveaway bump — post sobsomoy niche + earning FAQ (2026-10-11)
+- **Bump hours:** purono post delete + fresh post + pin (duplicate হয় না) — channel/group e jotoi message choluk giveaway nichei thake। Default 6h, 0 = off। Hourly loop + restart catch-up + manual 📌 Re-pin।
+- **Earning FAQ:** group e Telegram ad revenue nei (শুধু 1000+ subs channel)। Sponsor line/auto-DM blast চাইলে বলো — setting বানিয়ে দেব। Bot spam-ad দিলে Telegram ban — tai anti-ads default ON রাখো।
+
+## U. Fake staff-title decline (2026-10-11)
+- Name/username e owner-admin-moderator-founder-ceo-support-official-staff-manager (default) + custom titles — kintu real admin na → message decline (delete + custom warn)।
+- Decline text customizable `{name} {title} {id}` সহ (username/URL বসানো যায়) + delete-sec (0 = notice kokhono delete hobe na, thakbe)। Real admin/channel exempt।

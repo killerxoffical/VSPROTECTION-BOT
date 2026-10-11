@@ -186,6 +186,31 @@ const REAL_BAD_WORDS = [
 // Choto/dangerous word — শুধু আলাদা word হিসেবে মিলবে
 // (class/unisex/magic/shoe/title/cucumber/branding এ ধরবে না)
 const BOUNDARY_BAD_WORDS = ["mc", "bc", "ass", "sex", "cum", "tit", "hoe", "magi", "randi", "abal", "chor", "churi"];
+// Fake staff-title list (name/username e owner-admin-moderator — kintu real admin na)
+// Default + custom দুটোই চলবে (panel থেকে)।
+const DEFAULT_FAKE_TITLES = ["owner", "admin", "administrator", "moderator", "mod", "founder", "ceo", "support", "official", "staff", "manager"];
+// name/username te title match? choto (<=4) strict boundary, boro includes.
+// matched word return kore (decline text e {title} বসে), nahole "".
+function fakeTitleHit(name, username, conf) {
+    const files = [
+        String(name || "").toLowerCase(),
+        String(username || "").toLowerCase().replace(/^@/, "")
+    ].filter(Boolean);
+    if (!files.length) return "";
+    const all = [];
+    if (conf && Array.isArray(conf.customTitles)) {
+        conf.customTitles.forEach((x) => { const w = String(x || "").trim().toLowerCase(); if (w.length >= 2) all.push(w); });
+    }
+    if (!conf || conf.useDefaultTitles !== false) all.push(...DEFAULT_FAKE_TITLES);
+    for (const w of all) {
+        const short = /^[a-z0-9]+$/.test(w) && w.length <= 4;
+        for (const f of files) {
+            if (short) { try { if (new RegExp("\\b" + escRe(w) + "\\b", "i").test(f)) return w; } catch (e) {} }
+            else if (f.includes(w)) return w;
+        }
+    }
+    return "";
+}
 // Abuse normalizer: symbol strip + ph→f + leet + repeat-collapse
 function normAbuse(s) {
     let x = String(s || "").toLowerCase().replace(/[^a-z0-9\u0980-\u09FF]/g, "");
@@ -410,11 +435,48 @@ app.post("/api/tg/test-trigger", async (req, res) => {
 });
 
 // ---------------- 6. GIVEAWAY API ----------------
+// Giveaway post builder (create + hourly refresh duijonei same design)
+function giveawayJoinBtn(giveawayId, n) {
+    return { inline_keyboard: [[{ text: `🎉 Join (${n})`, callback_data: `giveaway_join:${giveawayId}` }]] };
+}
+function giveawayEndsMs(g) {
+    try {
+        if (g.endsAt && g.endsAt.toMillis) return g.endsAt.toMillis();
+        if (typeof g.endsAt === "number") return g.endsAt;
+    } catch (e) {}
+    return 0;
+}
+function fmtLeft(ms) {
+    if (ms <= 0) return "শেষ মুহূর্তে!";
+    const m = Math.floor(ms / 60000);
+    if (m < 60) return `${m} মিনিট`;
+    const h = Math.floor(m / 60);
+    if (h < 48) return `${h} ঘণ্টা${m % 60 ? ` ${m % 60} মিনিট` : ""}`;
+    return `${Math.floor(h / 24)} দিন ${h % 24} ঘণ্টা`;
+}
+function giveawayCaption(g, joined) {
+    const wc = Math.max(1, Number(g.winnersCount || 1));
+    const endMs = giveawayEndsMs(g);
+    const timeLine = endMs
+        ? `⏳ <b>Ends in:</b> ${fmtLeft(endMs - Date.now())} (live!)\n`
+        : (Number(g.durationH) > 0 ? `⏳ <b>Ends in:</b> ${g.durationH} ঘণ্টা (auto-result!)\n` : `⏳ <b>Ends:</b> admin End চাপলে\n`);
+    return `🎊 <b>${g.title}</b> 🎊\n` +
+        `━━━━━━━━━━━━\n` +
+        `🎁 <b>Prize:</b> ${g.amount ? g.amount + " " : ""}${g.itemName}\n` +
+        (g.desc ? `📝 ${g.desc}\n` : ``) +
+        `🏆 <b>Winners:</b> ${wc} জন   👥 <b>Joined:</b> ${joined}\n` +
+        timeLine +
+        `━━━━━━━━━━━━\n` +
+        `👇 <b>Join</b> বাটনে চাপ দিয়ে অংশ নাও!`;
+}
+
 app.post("/api/tg/create-giveaway", async (req, res) => {
-    const { chatId, title, itemName, amount, winnersCount, desc, photoUrl, durationH, botId } = req.body;
+    const { chatId, title, itemName, amount, winnersCount, desc, photoUrl, durationH, bumpH, botId } = req.body;
     if (!chatId || !title || !itemName) return res.status(400).json({ ok: false, error: "সবগুলো তথ্য পূরণ করুন" });
     const sender = pickBot(botId) || groupBot;
     const durH = Math.max(0, Number(durationH) || 0);
+    const wc = Math.max(1, Number(winnersCount || 1));
+    const bmpH = Math.max(0, Math.min(168, Number(bumpH) || 0));
 
     try {
         let gOwner = "";
@@ -422,45 +484,136 @@ app.post("/api/tg/create-giveaway", async (req, res) => {
         const giveawayRef = await db.collection("giveaways").add({
             chatId: chatId.toString(),
             ownerUid: gOwner,
+            botId: (botId || "default").toString(),
             title, itemName,
             amount: amount || "",
             desc: (desc || "").toString().slice(0, 500),
             photoUrl: (photoUrl || "").toString().slice(0, 500),
             durationH: durH,
-            winnersCount: Math.max(1, Number(winnersCount || 1)),
+            endsAt: durH > 0 ? admin.firestore.Timestamp.fromMillis(Date.now() + Math.min(durH, 168) * 3600 * 1000) : null,
+            bumpH: bmpH,
+            lastBumpAt: admin.firestore.Timestamp.fromMillis(Date.now()),
+            winnersCount: wc,
             participants: [],
             status: "active",
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        const prizeLine = `🎁 <b>Prize:</b> ${amount ? amount + " " : ""}${itemName}`;
-        const joinBtn = (n) => ({ inline_keyboard: [[{ text: `🎉 Join (${n})`, callback_data: `giveaway_join:${giveawayRef.id}` }]] });
-        const caption =
-            `🎊 <b>${title}</b> 🎊\n` +
-            `━━━━━━━━━━━━\n` +
-            `${prizeLine}\n` +
-            (desc ? `📝 ${desc}\n` : ``) +
-            `🏆 <b>Winners:</b> ${Math.max(1, Number(winnersCount || 1))} জন\n` +
-            (durH > 0 ? `⏳ <b>Ends in:</b> ${durH} ঘণ্টা (auto-result!)\n` : `⏳ <b>Ends:</b> admin End চাপলে\n`) +
-            `━━━━━━━━━━━━\n` +
-            `👇 <b>Join</b> বাটনে চাপ দিয়ে অংশ নাও!`;
+        const g = { title, itemName, amount: amount || "", desc: (desc || "").toString().slice(0, 500), winnersCount: wc, durationH: durH, endsAt: durH > 0 ? Date.now() + Math.min(durH, 168) * 3600 * 1000 : 0 };
+        const caption = giveawayCaption(g, 0);
         let gMsg;
         if (photoUrl) {
-            gMsg = await sender.sendPhoto(chatId, photoUrl, { caption, parse_mode: "HTML", reply_markup: joinBtn(0) }).catch(async () => {
-                return sender.sendMessage(chatId, caption, { parse_mode: "HTML", reply_markup: joinBtn(0) });
+            gMsg = await sender.sendPhoto(chatId, photoUrl, { caption, parse_mode: "HTML", reply_markup: giveawayJoinBtn(giveawayRef.id, 0) }).catch(async () => {
+                return sender.sendMessage(chatId, caption, { parse_mode: "HTML", reply_markup: giveawayJoinBtn(giveawayRef.id, 0) });
             });
         } else {
-            gMsg = await sender.sendMessage(chatId, caption, { parse_mode: "HTML", reply_markup: joinBtn(0) });
+            gMsg = await sender.sendMessage(chatId, caption, { parse_mode: "HTML", reply_markup: giveawayJoinBtn(giveawayRef.id, 0) });
         }
         await sender.pinChatMessage(chatId, gMsg.message_id).catch(() => {});
 
         await giveawayRef.update({ messageId: gMsg.message_id });
 
-        // Auto-end timer (server restart হলে manual End দিও)
+        // Auto-end timer (server restart hole hourly loop + manual End backup)
         if (durH > 0) {
             setTimeout(() => { finishGiveaway(giveawayRef.id, sender).catch(() => {}); }, Math.min(durH, 168) * 3600 * 1000);
         }
-        return res.json({ ok: true, message: "🎉 Premium giveaway পোস্ট হয়েছে!" + (durH > 0 ? ` (${durH}h পর auto-result)` : ""), giveawayId: giveawayRef.id });
+        return res.json({ ok: true, message: "🎉 Premium giveaway পোস্ট + pin হয়েছে!" + (durH > 0 ? ` (${durH}h পর auto-result)` : ""), giveawayId: giveawayRef.id });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// Bump: purono post delete + fresh post niche (duplicate ছাড়া, pin সহ)
+// Channel/group e jotoi message choluk — giveaway sobar chokher samne thake।
+async function bumpGiveaway(giveawayId, sender) {
+    const gDoc = await db.collection("giveaways").doc(giveawayId).get();
+    if (!gDoc.exists) return false;
+    const g = gDoc.data();
+    if (g.status !== "active") return false;
+    sender = sender || pickBot(g.botId) || groupBot;
+    const joined = (g.participants || []).length;
+    const cap = giveawayCaption(g, joined);
+    const markup = giveawayJoinBtn(giveawayId, joined);
+    let fresh;
+    try {
+        if (g.photoUrl) {
+            fresh = await sender.sendPhoto(g.chatId, g.photoUrl, { caption: cap, parse_mode: "HTML", reply_markup: markup }).catch(async () => {
+                return sender.sendMessage(g.chatId, cap, { parse_mode: "HTML", reply_markup: markup });
+            });
+        } else {
+            fresh = await sender.sendMessage(g.chatId, cap, { parse_mode: "HTML", reply_markup: markup });
+        }
+    } catch (e) { return false; } // pathate na parle purono post touch korbo na
+    if (!fresh || !fresh.message_id) return false;
+    try { await sender.pinChatMessage(g.chatId, fresh.message_id, { disable_notification: true }); } catch (e) {}
+    if (g.messageId && g.messageId !== fresh.message_id) {
+        try { await sender.deleteMessage(g.chatId, g.messageId); } catch (e) {}
+    }
+    await gDoc.ref.update({ messageId: fresh.message_id, lastBumpAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+    return true;
+}
+// Hourly refresh: joined count + live countdown update + silent re-pin
+// (message jotoi choluk, pin-bar + fresh count e keu miss korbe na)
+async function refreshGiveaway(giveawayId, sender) {
+    const gDoc = await db.collection("giveaways").doc(giveawayId).get();
+    if (!gDoc.exists) return false;
+    const g = gDoc.data();
+    if (g.status !== "active" || !g.messageId) return false;
+    sender = sender || pickBot(g.botId) || groupBot;
+    const joined = (g.participants || []).length;
+    try {
+        const markup = giveawayJoinBtn(giveawayId, joined);
+        if (g.photoUrl) {
+            await sender.editMessageCaption(giveawayCaption(g, joined), { chat_id: g.chatId, message_id: g.messageId, parse_mode: "HTML", reply_markup: markup });
+        } else {
+            await sender.editMessageText(giveawayCaption(g, joined), { chat_id: g.chatId, message_id: g.messageId, parse_mode: "HTML", reply_markup: markup, disable_web_page_preview: true });
+        }
+    } catch (e) {
+        const m = String((e && e.message) || e).toLowerCase();
+        if (m.includes("message to edit not found") || m.includes("message can't be edited") || m.includes("message to delete not found")) {
+            await gDoc.ref.update({ status: "ended", note: "post deleted" }).catch(() => {});
+        }
+        return false;
+    }
+    try { await sender.pinChatMessage(g.chatId, g.messageId, { disable_notification: true }); } catch (e) {}
+    return true;
+}
+async function refreshActiveGiveaways() {
+    try {
+        const snap = await db.collection("giveaways").where("status", "==", "active").limit(50).get();
+        for (const d of snap.docs) {
+            try {
+                const g = d.data();
+                const sender = pickBot(g.botId) || groupBot;
+                const endMs = giveawayEndsMs(g);
+                if (endMs && Date.now() > endMs) { await finishGiveaway(d.id, sender).catch(() => {}); continue; }
+                // Bump due? (purono post niche fresh kore ano)
+                try {
+                    const bH = Math.max(0, Number(g.bumpH) || 0);
+                    const lb = g.lastBumpAt && g.lastBumpAt.toMillis ? g.lastBumpAt.toMillis() : 0;
+                    if (bH > 0 && Date.now() - lb > Math.min(bH, 168) * 3600 * 1000) {
+                        await bumpGiveaway(d.id, sender).catch(() => {});
+                        continue;
+                    }
+                } catch (e) {}
+                await refreshGiveaway(d.id, sender);
+            } catch (e) {}
+            await new Promise((r) => setTimeout(r, 1500));
+        }
+    } catch (e) { console.error("[GW-REFRESH]", e.message); }
+}
+// Manual re-pin (panel theke jekono somoy)
+app.post("/api/tg/repin-giveaway", async (req, res) => {
+    const { giveawayId, botId } = req.body;
+    try {
+        const gDoc = await db.collection("giveaways").doc(giveawayId).get();
+        if (!gDoc.exists) return res.status(404).json({ ok: false, error: "Giveaway not found" });
+        const g = gDoc.data();
+        if (g.status !== "active") return res.status(400).json({ ok: false, error: "Giveaway active nei" });
+        const sender = pickBot(botId) || pickBot(g.botId) || groupBot;
+        await sender.pinChatMessage(g.chatId, g.messageId, { disable_notification: true });
+        await refreshGiveaway(giveawayId, sender);
+        return res.json({ ok: true, message: "📌 Re-pinned + refreshed!" });
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
     }
@@ -499,7 +652,14 @@ async function finishGiveaway(giveawayId, sender) {
 app.post("/api/tg/end-giveaway", async (req, res) => {
     const { giveawayId, botId } = req.body;
     try {
-        const sender = pickBot(botId) || groupBot;
+        let sender = pickBot(botId) || null;
+        if (!sender) {
+            try {
+                const gd = await db.collection("giveaways").doc(giveawayId).get();
+                if (gd.exists) sender = pickBot(gd.data().botId);
+            } catch (e) {}
+        }
+        sender = sender || groupBot;
         const out = await finishGiveaway(giveawayId, sender);
         if (!out.ok && out.error === "Giveaway not found") return res.status(404).json(out);
         if (!out.ok) return res.status(400).json(out);
@@ -816,6 +976,11 @@ groupBot.on("my_chat_member", async (msg) => {
                 antiInbox: true,
                 antiBot: true,
                 antiButton: true,
+                fakeTitleOn: true,
+                useDefaultTitles: true,
+                customTitles: [],
+                fakeTitleMsg: "",
+                fakeTitleDeleteSec: 0,
                 useDefaultBadWords: false,
                 customBadWords: [],
                 filterDeleteSec: 4,
@@ -1351,6 +1516,23 @@ groupBot.on("message", async (msg) => {
                 if (bm) autoDel(chatId, bm.message_id, filterDeleteSec(groupConf));
                 return;
             }
+            // ০.৭ Fake staff-title block (name/username e owner-admin-moderator,
+            // kintu real admin na → decline; real admin exempt)
+            if (cfgBool(groupConf, "fakeTitleOn", true)) {
+                const hit = fakeTitleHit(currentName, currentUsername, groupConf);
+                if (hit) {
+                    await delMsg(chatId, msgId);
+                    const tpl = (groupConf.fakeTitleMsg || "").trim() ||
+                        `🚫 <b>{name}</b> — "<b>{title}</b>" নামে ভান করে লাভ নেই! তুমি এই group এর admin/staff নও। আসল পরিচয়ে কথা বলো।`;
+                    const body = tpl.split("{title}").join(cleanName(hit)).split("{id}").join(String(userId)).split("{name}").join(cleanName(currentName));
+                    const dm = await groupBot.sendMessage(chatId, body, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(async () => {
+                        return groupBot.sendMessage(chatId, body.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => null);
+                    });
+                    const ds = cfgNum(groupConf, "fakeTitleDeleteSec", 0, 0, 300);
+                    if (dm) autoDel(chatId, dm.message_id, ds);
+                    return;
+                }
+            }
             // ১. ফরোয়ার্ড ব্লক (linked/allowed চ্যানেল ছাড়া সব ডিলিট)
             const isForwarded = Boolean(
                 msg.forward_from ||
@@ -1644,3 +1826,6 @@ app.get("/api/tg/groups-count", async (req, res) => {
 const PORT2 = PORT;
 app.listen(PORT2, () => console.log(`[VS] Protection Bot active on port ${PORT2}`));
 console.log("[VS] Group protection polling started. Bot ke group e ADMIN banalei kaj shuru.");
+// Giveaway hourly refresh (count + countdown + silent re-pin) + restart catch-up
+setTimeout(() => { refreshActiveGiveaways().catch(() => {}); }, 2 * 60 * 1000);
+setInterval(() => { refreshActiveGiveaways().catch(() => {}); }, 60 * 60 * 1000);
