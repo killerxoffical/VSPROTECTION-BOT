@@ -113,3 +113,14 @@ Sadharon user: shudhu nijer claimed group + settings + triggers + warns.
 - **Notun bot API:** `POST /api/tg/send-message` {chatId, text, userId?}, `POST /api/tg/clear-warn` {chatId, userId}.
 - **IMPORTANT:** `firestore.rules` e `tg_members` block notun — Rules **re-publish** na korle Members/Send kaj korbe na!
 - Backward compatible: purono group e notun field na thakle default (age jemon cholto temon) cholbe.
+
+## L. v4.0 Developer Portal — My Applications + multi-bot (2026-10-11)
+- **Login er por Dashboard = My Applications** (image er moto dark cards): Shared Bot + nijer connected bots + sobar pase **+ card**.
+- **+ tap → popup:** login email (auto) + bot display name + BotFather token → **Verify & Connect** (`POST /api/tg/verify-bot` check kore, `vs_bots` e save). Worker live pickup kore polling start kore.
+- **Bot e tap → oi bot er groups.** Group e tap → **fullscreen premium panel**: bam pashe feature rail (Filters/Flood/Gali/Messages/Welcome/Scammer/Trackers/Triggers/Members/Warns/Send/Manage), majhkhane selected feature — sob customize ager motoi.
+- **Nijer bot = claim lage na:** bot ke group e add + Admin banalei group auto-link hoye oi bot er niche asbe. Shared bot e ager claim system thakbei.
+- **API te botId:** test/welcome/trigger/send/moderate/broadcast ekhon sothik bot diye pathay.
+- **IMPORTANT (2 ta):**
+  1. `firestore.rules` e **`vs_bots`** block notun — re-publish must!
+  2. User bot er token server e polling chalabe — Render **1 instance** rakho; token revoke hole panel theke bot delete + reconnect.
+- ⚠️ Token Firestore e owner-only readable — repo/hosting e token post koro na.

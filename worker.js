@@ -57,6 +57,17 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 
+// ---------------- 2b. MULTI-BOT REGISTRY ----------------
+// Default shared bot + user-connected bots (vs_bots collection, popup diye connect).
+// botInstances: botId -> { bot, username }. APIs optional botId diye instance pick kore.
+const botInstances = new Map();
+function pickBot(botId) {
+    try {
+        if (botId && botInstances.has(String(botId))) return botInstances.get(String(botId)).bot;
+    } catch (e) {}
+    try { return groupBot; } catch (e) { return null; }
+}
+
 // ---------------- 3. BOT ----------------
 const GROUP_PROTECT_BOT_TOKEN = (process.env.GROUP_PROTECT_BOT_TOKEN || "").trim();
 if (!GROUP_PROTECT_BOT_TOKEN) {
@@ -133,8 +144,9 @@ function containsBadWord(text) {
 
 // ---------------- 4. BROADCAST API ----------------
 app.post("/api/tg/group-broadcast", async (req, res) => {
-    const { text, photoUrl, chatId } = req.body;
+    const { text, photoUrl, chatId, botId } = req.body;
     if (!text) return res.status(400).json({ ok: false, error: "মেসেজ লিখুন" });
+    const sender = pickBot(botId) || groupBot;
 
     try {
         let targets = [];
@@ -149,9 +161,9 @@ app.post("/api/tg/group-broadcast", async (req, res) => {
         for (const targetId of targets) {
             try {
                 if (photoUrl) {
-                    await groupBot.sendPhoto(targetId, photoUrl, { caption: text, parse_mode: "HTML" });
+                    await sender.sendPhoto(targetId, photoUrl, { caption: text, parse_mode: "HTML" });
                 } else {
-                    await groupBot.sendMessage(targetId, text, { parse_mode: "HTML" });
+                    await sender.sendMessage(targetId, text, { parse_mode: "HTML" });
                 }
                 successCount++;
             } catch (err) {}
@@ -207,8 +219,9 @@ async function resolveWelcome(chatId, gConf, name) {
 }
 
 app.post("/api/tg/test-welcome", async (req, res) => {
-    const { chatId } = req.body;
+    const { chatId, botId } = req.body;
     if (!chatId) return res.status(400).json({ ok: false, error: "Group ID দিন" });
+    const sender = pickBot(botId) || groupBot;
     try {
         let gConf = {};
         try {
@@ -220,11 +233,11 @@ app.post("/api/tg/test-welcome", async (req, res) => {
         const opts = { caption: w.text, parse_mode: "HTML" };
         if (w.buttons.length) opts.reply_markup = { inline_keyboard: w.buttons };
         try {
-            await groupBot.sendPhoto(chatId.toString(), w.img, opts);
+            await sender.sendPhoto(chatId.toString(), w.img, opts);
         } catch (e) {
             const topts = { parse_mode: "HTML" };
             if (w.buttons.length) topts.reply_markup = { inline_keyboard: w.buttons };
-            await groupBot.sendMessage(chatId.toString(), w.text, topts);
+            await sender.sendMessage(chatId.toString(), w.text, topts);
         }
         return res.json({ ok: true, message: "Welcome preview পাঠানো হয়েছে!" });
     } catch (e) {
@@ -232,19 +245,33 @@ app.post("/api/tg/test-welcome", async (req, res) => {
     }
 });
 
+// Popup bot-connector: token thik kina verify (store kore na — panel Firestore e save kore)
+app.post("/api/tg/verify-bot", async (req, res) => {
+    const token = ((req.body || {}).token || "").trim();
+    if (!token || !token.includes(":")) return res.status(400).json({ ok: false, error: "সঠিক token দিন (BotFather থেকে)" });
+    try {
+        const tmp = new TelegramBot(token, { polling: false });
+        const me = await tmp.getMe();
+        return res.json({ ok: true, id: String(me.id), username: me.username ? ("@" + me.username) : "", name: me.first_name || "Bot" });
+    } catch (e) {
+        return res.status(400).json({ ok: false, error: "Token ভুল / bot পাওয়া যায়নি। BotFather token check করো।" });
+    }
+});
+
 // Admin -> bot diye group/user ke message (panel Send box)
 app.post("/api/tg/send-message", async (req, res) => {
-    const { chatId, text, userId, replyTo } = req.body;
+    const { chatId, text, userId, replyTo, botId } = req.body;
     if (!chatId || !text) return res.status(400).json({ ok: false, error: "chatId + text দিন" });
+    const sender = pickBot(botId) || groupBot;
     try {
         const opts = { parse_mode: "HTML", disable_web_page_preview: true };
         if (replyTo) opts.reply_to_message_id = Number(replyTo);
         let body = String(text).slice(0, 3500);
         if (userId) body = `<a href="tg://user?id=${userId}">👤</a> ` + body;
-        const sent = await groupBot.sendMessage(chatId.toString(), body, opts).catch(async () => {
+        const sent = await sender.sendMessage(chatId.toString(), body, opts).catch(async () => {
             const retry = {};
             if (replyTo) retry.reply_to_message_id = Number(replyTo);
-            return groupBot.sendMessage(chatId.toString(), String(text).slice(0, 3500), retry);
+            return sender.sendMessage(chatId.toString(), String(text).slice(0, 3500), retry);
         });
         return res.json({ ok: true, message: "পাঠানো হয়েছে!", messageId: sent ? sent.message_id : null });
     } catch (e) {
@@ -266,8 +293,9 @@ app.post("/api/tg/clear-warn", async (req, res) => {
 
 // Trigger test: keyword reply + buttons গ্রুপে পাঠিয়ে চেক করা
 app.post("/api/tg/test-trigger", async (req, res) => {
-    const { chatId, keyword } = req.body;
+    const { chatId, keyword, botId } = req.body;
     if (!chatId || !keyword) return res.status(400).json({ ok: false, error: "Group + keyword দিন" });
+    const sender = pickBot(botId) || groupBot;
     try {
         const gDoc = await db.collection("tg_groups").doc(chatId.toString()).get();
         const conf = gDoc.exists ? gDoc.data() : {};
@@ -277,11 +305,11 @@ app.post("/api/tg/test-trigger", async (req, res) => {
         const opts = { parse_mode: "HTML", disable_web_page_preview: true };
         if (built.markup) opts.reply_markup = built.markup;
         try {
-            await groupBot.sendMessage(chatId.toString(), trig.reply || "Test", opts);
+            await sender.sendMessage(chatId.toString(), trig.reply || "Test", opts);
         } catch (e) {
             const retry = { disable_web_page_preview: true };
             if (built.markup) retry.reply_markup = built.markup;
-            await groupBot.sendMessage(chatId.toString(), trig.reply || "Test", retry);
+            await sender.sendMessage(chatId.toString(), trig.reply || "Test", retry);
         }
         if (built.skipped.length > 0) {
             return res.json({ ok: true, message: "Test পাঠানো হয়েছে! (" + built.buttons.length + " button, " + built.skipped.length + " টি বাদ পড়েছে — লিংক চেক করুন)", skipped: built.skipped });
@@ -294,8 +322,9 @@ app.post("/api/tg/test-trigger", async (req, res) => {
 
 // ---------------- 6. GIVEAWAY API ----------------
 app.post("/api/tg/create-giveaway", async (req, res) => {
-    const { chatId, title, itemName, amount, winnersCount } = req.body;
+    const { chatId, title, itemName, amount, winnersCount, botId } = req.body;
     if (!chatId || !title || !itemName) return res.status(400).json({ ok: false, error: "সবগুলো তথ্য পূরণ করুন" });
+    const sender = pickBot(botId) || groupBot;
 
     try {
         let gOwner = "";
@@ -312,7 +341,7 @@ app.post("/api/tg/create-giveaway", async (req, res) => {
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        const gMsg = await groupBot.sendMessage(chatId,
+        const gMsg = await sender.sendMessage(chatId,
             `🎉 <b>${title}</b>\n\n` +
             `🎁 <b>পুরস্কার:</b> ${amount ? amount + " " : ""}${itemName}\n` +
             `🏆 <b>বিজয়ী নির্বাচন:</b> ${winnersCount} জন\n\n` +
@@ -326,7 +355,7 @@ app.post("/api/tg/create-giveaway", async (req, res) => {
                 }
             }
         );
-        await groupBot.pinChatMessage(chatId, gMsg.message_id).catch(() => {});
+        await sender.pinChatMessage(chatId, gMsg.message_id).catch(() => {});
 
         await giveawayRef.update({ messageId: gMsg.message_id });
         return res.json({ ok: true, message: "গিভঅ্যাওয়ে পোস্ট করা হয়েছে!", giveawayId: giveawayRef.id });
@@ -336,17 +365,18 @@ app.post("/api/tg/create-giveaway", async (req, res) => {
 });
 
 app.post("/api/tg/end-giveaway", async (req, res) => {
-    const { giveawayId } = req.body;
+    const { giveawayId, botId } = req.body;
     try {
         const gDoc = await db.collection("giveaways").doc(giveawayId).get();
         if (!gDoc.exists) return res.status(404).json({ ok: false, error: "Giveaway not found" });
+        const sender = pickBot(botId) || groupBot;
 
         const g = gDoc.data();
         if (g.status === "ended") return res.status(400).json({ ok: false, error: "ইতিমধ্যে সমাপ্ত হয়েছে" });
 
         const participants = g.participants || [];
         if (participants.length === 0) {
-            await groupBot.sendMessage(g.chatId, `⚠️ <b>${g.title} সমাপ্ত:</b> কোনো অংশগ্রহণকারী পাওয়া যায়নি।`, { parse_mode: "HTML" });
+            await sender.sendMessage(g.chatId, `⚠️ <b>${g.title} সমাপ্ত:</b> কোনো অংশগ্রহণকারী পাওয়া যায়নি।`, { parse_mode: "HTML" });
             await gDoc.ref.update({ status: "ended" });
             return res.json({ ok: true, message: "No participants" });
         }
@@ -360,8 +390,8 @@ app.post("/api/tg/end-giveaway", async (req, res) => {
         });
         winnerText += `\n🎉 অভিনন্দন সবাইকে! এডমিনের সাথে যোগাযোগ করে পুরস্কার সংগ্রহ করুন।`;
 
-        await groupBot.sendMessage(g.chatId, winnerText, { parse_mode: "HTML" });
-        await groupBot.unpinChatMessage(g.chatId).catch(() => {});
+        await sender.sendMessage(g.chatId, winnerText, { parse_mode: "HTML" });
+        await sender.unpinChatMessage(g.chatId).catch(() => {});
         await gDoc.ref.update({ status: "ended", winners });
 
         return res.json({ ok: true, winners });
@@ -372,19 +402,20 @@ app.post("/api/tg/end-giveaway", async (req, res) => {
 
 // ---------------- 7. MODERATE API (ban/unban/mute) ----------------
 app.post("/api/tg/moderate-user", async (req, res) => {
-    const { action, chatId, userId } = req.body;
+    const { action, chatId, userId, botId } = req.body;
     if (!chatId || !userId || !action) return res.status(400).json({ ok: false, error: "Missing parameters" });
+    const sender = pickBot(botId) || groupBot;
 
     try {
         if (action === "ban") {
-            await groupBot.banChatMember(chatId, userId);
+            await sender.banChatMember(chatId, userId);
             return res.json({ ok: true, message: "User banned!" });
         } else if (action === "unban") {
-            await groupBot.unbanChatMember(chatId, userId, { only_if_banned: true });
+            await sender.unbanChatMember(chatId, userId, { only_if_banned: true });
             return res.json({ ok: true, message: "User unbanned!" });
         } else if (action === "mute") {
             const until = Math.floor(Date.now() / 1000) + 3600;
-            await groupBot.restrictChatMember(chatId, userId, {
+            await sender.restrictChatMember(chatId, userId, {
                 permissions: { can_send_messages: false },
                 until_date: until
             });
@@ -545,6 +576,56 @@ async function trackMember(chatId, userId, name, username, ownerUid) {
     } catch (e) {}
 }
 
+// Trigger multi-button builder — GLOBAL (live reply + test API duijoneri lage)
+function cleanTriggerUrl(raw) {
+    if (!raw) return "";
+    let u = raw.toString().trim();
+    if (!u) return "";
+    if (u.startsWith("@")) u = "https://t.me/" + u.slice(1);
+    u = u.replace(/t\.me\/@/g, "t.me/");
+    if (!/^https?:\/\//i.test(u)) {
+        if (!u.includes(".") && !u.includes("/") && !u.includes(":") && !u.includes(" ")) {
+            u = "https://t.me/" + u.replace(/^@/, "");
+        } else {
+            u = "https://" + u;
+        }
+    }
+    try {
+        const parsed = new URL(u);
+        if ((parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname.includes(".")) return parsed.href;
+    } catch (e) {}
+    return "";
+}
+function buildTriggerMarkup(trig) {
+    const buttons = [];
+    const skipped = [];
+    const pushBtn = (txt, rawUrl) => {
+        const validUrl = cleanTriggerUrl(rawUrl);
+        const label = (txt || "").toString().trim().slice(0, 60);
+        if (label && validUrl) {
+            buttons.push([{ text: label, url: validUrl }]);
+        } else if (label) {
+            skipped.push({ label: label, url: (rawUrl || "").toString().slice(0, 120) });
+        }
+    };
+    if (trig) {
+        if (Array.isArray(trig.buttons) && trig.buttons.length > 0) {
+            trig.buttons.forEach((b) => { if (b) pushBtn(b.text, b.url); });
+        } else if (trig.btnText && trig.btnUrl) {
+            pushBtn(trig.btnText, trig.btnUrl);
+        }
+    }
+    return { buttons: buttons, skipped: skipped, markup: buttons.length > 0 ? { inline_keyboard: buttons } : null };
+}
+
+// ---------------- 8c. MULTI-BOT FACTORY ----------------
+// Prottek bot (default shared + popup diye user-connected) eki protection engine pay.
+// BOTMETA = { id, username, ownerUid }. User bot hole tar group auto owner-link hoy (claim lage na).
+function createProtector(groupBot, BOTMETA) {
+const BOT_ID = (BOTMETA && BOTMETA.id) || "default";
+const BOT_UN = (BOTMETA && BOTMETA.username) || "";
+const BOT_OWNER = (BOTMETA && BOTMETA.ownerUid) || "";
+
 // গ্রুপে বট অ্যাড হলেই স্বয়ংক্রিয় রেজিস্টার (default protection ON)
 groupBot.on("my_chat_member", async (msg) => {
     try {
@@ -554,14 +635,16 @@ groupBot.on("my_chat_member", async (msg) => {
         if (ctype !== "group" && ctype !== "supergroup" && ctype !== "channel") return;
         const newStatus = msg.new_chat_member ? msg.new_chat_member.status : "";
         groupAdminCache.delete(chat.id.toString());
-        linkedCache.delete(chat.id.toString());
+        try { linkedCache.delete(chat.id.toString()); } catch (e) {}
 
         if (newStatus === "administrator" || newStatus === "member") {
-            await db.collection("tg_groups").doc(chat.id.toString()).set({
+            const reg = {
                 id: chat.id.toString(),
                 title: chat.title || "Channel/Group",
                 chatType: ctype,
                 username: chat.username ? `@${chat.username}` : "Private",
+                botId: BOT_ID,
+                botUsername: BOT_UN,
                 antiLink: true,
                 antiVideo: false,
                 antiForward: true,
@@ -572,15 +655,29 @@ groupBot.on("my_chat_member", async (msg) => {
                 scammerAlertOn: true, nameTrackOn: true, leaveLogOn: true,
                 welcomeMode: "global", welcomeDeleteSec: 10, trigCooldownSec: 15,
                 lastActive: admin.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-            console.log("[VS] New group registered:", chat.title, chat.id.toString());
+            };
+            // user-bot auto-link: shudhu owner khali thakle (onno karor claimed group chhiniye nebe na)
+            if (BOT_OWNER) {
+                try {
+                    const ex = await db.collection("tg_groups").doc(chat.id.toString()).get();
+                    if (!ex.exists || !(ex.data() || {}).ownerUid) {
+                        reg.ownerUid = BOT_OWNER;
+                        reg.claimedAt = admin.firestore.FieldValue.serverTimestamp();
+                        reg.autoLinked = true;
+                    }
+                } catch (e) {}
+            }
+            await db.collection("tg_groups").doc(chat.id.toString()).set(reg, { merge: true });
+            console.log("[VS] New group registered:", chat.title, chat.id.toString(), "via", BOT_ID);
             // Group e visible proof — bot jibito + ki korte hobe
             if (ctype === "group" || ctype === "supergroup") {
                 const isAdminNow = (newStatus === "administrator");
                 try {
                     await groupBot.sendMessage(chat.id.toString(),
                         isAdminNow
-                            ? `✅ <b>VS Protection চালু!</b>\n\n🆔 Group ID: <code>${chat.id}</code>\n\n🔑 Panel er <b>Claim Code</b> copy kore ekhane likhun:\n<code>/claim CODE</code>\n\n⚠️ Protection puropuri kaj korbe jokhon ami <b>Admin</b> (Delete + Ban + Pin permission soho).`
+                            ? (BOT_OWNER
+                                ? `✅ <b>VS Protection চালু!</b>\n\n🆔 Group ID: <code>${chat.id}</code>\n\n🎉 এই bot তোমার panel এর সাথে <b>auto-connected!</b> Dashboard → My Bots → এই bot এ tap করলেই group পাবে।`
+                                : `✅ <b>VS Protection চালু!</b>\n\n🆔 Group ID: <code>${chat.id}</code>\n\n🔑 Panel er <b>Claim Code</b> copy kore ekhane likhun:\n<code>/claim CODE</code>\n\n⚠️ Protection puropuri kaj korbe jokhon ami <b>Admin</b> (Delete + Ban + Pin permission soho).`)
                             : `👋 আমাকে <b>Admin</b> বানান — তাহলেই protection চালু হবে!\n\n🆔 Group ID: <code>${chat.id}</code>\n(Admin bananor por group auto-register হবে)`,
                         { parse_mode: "HTML" }).catch(() => {});
                 } catch (e) {}
@@ -595,13 +692,16 @@ groupBot.on("channel_post", async (msg) => {
     try {
         if (!msg.chat) return;
         const chatId = msg.chat.id.toString();
-        await db.collection("tg_groups").doc(chatId).set({
+        const reg = {
             id: chatId,
             title: msg.chat.title || "Channel",
             chatType: "channel",
             username: msg.chat.username ? `@${msg.chat.username}` : "Private",
+            botId: BOT_ID,
+            botUsername: BOT_UN,
             lastActive: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+        };
+        await db.collection("tg_groups").doc(chatId).set(reg, { merge: true });
     } catch (e) {}
 });
 
@@ -736,13 +836,16 @@ groupBot.on("message", async (msg) => {
             return;
         }
 
-        // গ্রুপ ডাটাবেজে অটো-সিঙ্ক
-        db.collection("tg_groups").doc(chatId).set({
+        // গ্রুপ ডাটাবেজে অটো-সিঙ্ক (ownerUid touch kori na — nahole onner claimed group chhiniye nebe)
+        const syncDoc = {
             id: chatId,
             title: msg.chat.title || "Group",
             username: msg.chat.username ? `@${msg.chat.username}` : "Private",
+            botId: BOT_ID,
+            botUsername: BOT_UN,
             lastActive: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true }).catch(() => {});
+        };
+        db.collection("tg_groups").doc(chatId).set(syncDoc, { merge: true }).catch(() => {});
 
         // Member directory: sob sender er chat id collect (panel Send box er jonno)
         trackMember(chatId, fromUser.id.toString(), currentName, currentUsername, groupConf.ownerUid || "").catch(() => {});
@@ -1144,6 +1247,63 @@ groupBot.on("callback_query", async (query) => {
 
     } catch (e) {}
 });
+
+} // ================= end createProtector =================
+
+// ---------------- 10b. BOT MANAGER (user-connected bots via popup) ----------------
+function botPollErr(tag) {
+    return (e) => {
+        const m = (e && e.message) || String(e);
+        if (m.includes("409") || m.includes("conflict")) {
+            console.error(`[POLLING 409:${tag}] token onno kothao cholche (2 instance / BotFather revoke?)`);
+        } else if (m.includes("401") || m.includes("Unauthorized")) {
+            console.error(`[POLLING 401:${tag}] token invalid/revoked — panel theke reconnect koro.`);
+        } else {
+            console.error(`[POLLING:${tag}]`, m.slice(0, 160));
+        }
+    };
+}
+function startUserBot(docId, data) {
+    stopUserBot(docId);
+    if (!data || data.active === false || !data.botToken) return;
+    try {
+        const b = new TelegramBot(String(data.botToken).trim(), { polling: true });
+        b.on("polling_error", botPollErr(String(data.botUsername || docId).slice(0, 24)));
+        b.getMe().then((me) => {
+            const un = me.username ? ("@" + me.username) : "";
+            botInstances.set(String(docId), { bot: b, username: un });
+            // username fresh rakhি
+            db.collection("vs_bots").doc(String(docId)).set({ botUsername: un, botName: me.first_name || data.botName || "Bot" }, { merge: true }).catch(() => {});
+            console.log("[VS] User bot connected:", un, "owner", (data.ownerUid || "").slice(0, 8));
+        }).catch((e) => console.error("[VS] User bot token bad:", String(docId).slice(0, 8), e.message));
+        createProtector(b, { id: String(docId), username: data.botUsername || "", ownerUid: data.ownerUid || "" });
+        botInstances.set(String(docId), { bot: b, username: data.botUsername || "" });
+    } catch (e) { console.error("[VS] startUserBot fail:", e.message); }
+}
+function stopUserBot(docId) {
+    const x = botInstances.get(String(docId));
+    if (x) {
+        try { x.bot.stopPolling({ cancel: true }); } catch (e) { try { x.bot.stopPolling(); } catch (e2) {} }
+        botInstances.delete(String(docId));
+        console.log("[VS] User bot stopped:", String(docId).slice(0, 8));
+    }
+}
+// Default shared bot e engine attach
+createProtector(groupBot, { id: "default", username: "", ownerUid: "" });
+// Popup-connected bots: add/update/remove live
+const botSig = new Map(); // botId -> token|active signature (shudhu change hole restart, nahole loop)
+db.collection("vs_bots").onSnapshot((snap) => {
+    snap.docChanges().forEach((change) => {
+        const id = change.doc.id;
+        if (change.type === "removed") { stopUserBot(id); botSig.delete(id); return; }
+        const d = change.doc.data() || {};
+        const sig = String(d.botToken || "") + "|" + String(d.active !== false);
+        if (botSig.get(id) === sig && botInstances.has(id)) return; // username-only update — restart na
+        botSig.set(id, sig);
+        if (d.active === false || !d.botToken) { stopUserBot(id); return; }
+        startUserBot(id, d);
+    });
+}, (err) => console.error("[BOTS-SNAPSHOT]", err.message));
 
 // ---------------- 11. REALTIME CONFIG SYNC ----------------
 db.collection("tg_groups").onSnapshot((snap) => {

@@ -25,6 +25,16 @@ service cloud.firestore {
       allow delete: if superAdmin();
     }
 
+    // user-connected bots (popup connector): owner shudhu nijer ta
+    match /vs_bots/{bid} {
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if superAdmin() || (signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == resource.data.ownerUid);
+      allow delete: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+    }
+
     // groups: owner shudhu nijer ta pore/likhe. create shudhu bot (Admin SDK).
     match /tg_groups/{gid} {
       allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
