@@ -91,7 +91,16 @@ Sadharon user: shudhu nijer claimed group + settings + triggers + warns.
 
 ### I-5. Group claim flow (user der bolo)
 1. Panel login → dashboard e **Claim Code** (jemon `A7K2P9`) Copy
-2. Nijer group e bot ke **Admin** banao
-3. Group e likho: `/claim A7K2P9`
-4. Bot "link done" bollei group panel e asbe ✅
+2. Nijer group e bot ke **Admin** banao (Delete + Ban + Pin)
+3. Group e likho: `/claim A7K2P9` (command e tap korle `/claim@botname CODE` hoy — ekhon tao cholbe)
+4. Bot "link done" bollei panel e **🔄 Refresh Groups** chapo → group asbe ✅
 5. Panel theke Remove korle bot protection choltei thakbe, shudhu panel theke jabe
+
+## J. Fix log (2026-10-11) — "bot kaj kore na / code e add hoy na" fix
+1. **/claim kokhono cholto na:** `if (isAdmin) return;` chilo filter er age, ar /claim-/scammer chilo filter er pore → admin kokhono command porjonto pouchato na. Ekhon /claim + /scammer + tracker **admin-return er age** — fixed.
+2. **/claim@botname fail:** Telegram tap korle `/claim@Vareonprotection_bot CODE` hoy, purono parse `BOTNAME+CODE` banato → "ভুল CODE". Ekhon regex parse — fixed.
+3. **Bhule delete:** `ib` diye vibe/job, `mc/bc` diye comcast/welcome delete hoto. Ekhon word-boundary (`\b`) — fixed.
+4. **Bot jibito kina bujha jeto na:** ekhon group e add/Admin হলেই greeting + Group ID, `/id` + `/start` e reply, Render log e `@username` + polling 409 warning.
+5. **Anti-link default:** age default whitelist e `ppmod` chilo → ekhon khali = sob link block (nijer ta whitelist e likho).
+6. **Panel:** UID copy + 🔄 Refresh + Bot API URL sobar jonno + Welcome/Trigger Test button + Timestamp sort fix + duplicate apiBase ID fix.
+7. **Redeploy:** ei fix er por GitHub push → Render auto-redeploy → Logs e `[VS] Bot connected as @...` ashle group e `/id` likhe test koro.
