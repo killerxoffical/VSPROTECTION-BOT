@@ -192,3 +192,10 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Admin DM:** gali + full detail (নাম/ID/group/লেখা/warn) bot DM করে। শর্ত: Trackers tab e admin ID + admin bot e **/start** দেওয়া।
 - **Panel gali log:** Warns tab e "Recent Gali Log" — ke ki bollo bot thekei dekho (Firestore rules re-publish লাগবে: `tg_gali_log`)।
 - Test normal member ID দিয়ে করো (admin der bot dhore na)।
+
+## X. Still kaj na korle checklist + mention warn + DM test (2026-10-11)
+- **① Render redeploy MUST:** local file bodlalei hobe na — GitHub push → Render deploy success dekho, tarpor test।
+- **② Purono group fix:** Gali tab → **⚡ Built-in ON for ALL groups** (1 tap) বা per-group toggle ON + Save।
+- **③ Member ID diye test** (admin exempt) + **bot Admin** (Delete/Ban) — permission na thakle bot group Ei janabe।
+- **Warn ekhon clickable mention** (নামে tap = profile) + delete age, reply pore।
+- **DM verify:** Trackers → ID bosao → **📨 Test DM** (per-ID ✅/❌ + কারণ)। ID add hole bot auto **✅ Connected** DM পাঠায়। Fail = oi ID bot e **/start** দেয়নি।

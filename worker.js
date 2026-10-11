@@ -405,6 +405,31 @@ app.post("/api/tg/clear-warn", async (req, res) => {
     }
 });
 
+// Admin ID test DM — oi ID te bot পৌঁছায় কিনা check (connect verify)
+app.post("/api/tg/test-dm", async (req, res) => {
+    const { userId, chatId, botId, hello } = req.body;
+    if (!userId) return res.status(400).json({ ok: false, error: "userId দিন" });
+    let sender = pickBot(botId) || null;
+    if (!sender && chatId) {
+        try {
+            const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+            if (gd.exists) sender = pickBot(gd.data().botId);
+        } catch (e) {}
+    }
+    sender = sender || groupBot;
+    const txt = hello
+        ? `✅ <b>Connected!</b>\n\nEi bot ekhon tomake${chatId ? ` (<code>${chatId}</code>)` : ""} group er <b>live + gali alert</b> DM korbe. 🛡️`
+        : `✅ <b>Test OK!</b> Bot tomar ID te পৌঁছাতে পারে — live + gali alert DM আসবে। 🛡️`;
+    try {
+        await sender.sendMessage(String(userId), txt, { parse_mode: "HTML", disable_web_page_preview: true });
+        return res.json({ ok: true, message: "DM পৌঁছেছে ✅" });
+    } catch (e) {
+        const m = String((e && e.message) || "").toLowerCase();
+        const needStart = m.includes("can't initiate") || m.includes("bot was blocked") || m.includes("user not found") || m.includes("chat not found") || m.includes("forbidden");
+        return res.json({ ok: false, error: needStart ? "ওই ID bot e /start দেয়নি বা block করেছে — age /start দিতে বলো" : String((e && e.message) || e).slice(0, 160) });
+    }
+});
+
 // Trigger test: keyword reply + buttons গ্রুপে পাঠিয়ে চেক করা
 app.post("/api/tg/test-trigger", async (req, res) => {
     const { chatId, keyword, botId } = req.body;
@@ -1620,7 +1645,7 @@ groupBot.on("message", async (msg) => {
 
         const isAdmin = await isGroupAdmin(chatId, fromUser, msg);
 
-        // Admin ID auto-collect (live/gali DM যাবে) — 24h te 1 bar write
+        // Admin ID auto-collect (live/gali DM যাবে) — 24h te 1 bar write + hello DM
         if (isAdmin && fromUser && !isAnonymousAdmin && !fromUser.is_bot) {
             try {
                 const nk = chatId + ":" + fromUser.id;
@@ -1630,6 +1655,12 @@ groupBot.on("message", async (msg) => {
                     await db.collection("tg_groups").doc(chatId).set(
                         { notifyAdmins: admin.firestore.FieldValue.arrayUnion(fromUser.id.toString()) },
                         { merge: true }).catch(() => {});
+                    // ID add হলেই hello DM (fail = /start দেয়নি, silent)
+                    try {
+                        await groupBot.sendMessage(fromUser.id.toString(),
+                            `✅ <b>Connected!</b>\n\nEi bot ekhon tomake <b>${cleanName(msg.chat.title)}</b> (<code>${chatId}</code>) group er <b>live + gali alert</b> DM korbe. 🛡️`,
+                            { parse_mode: "HTML", disable_web_page_preview: true }).catch(() => {});
+                    } catch (e) {}
                 }
             } catch (e) {}
         }
@@ -2022,6 +2053,7 @@ groupBot.on("message", async (msg) => {
                     });
                 } catch (e) {}
                 const atName = `@${fromUser.username || fromUser.first_name}`;
+                const mention = `<a href="tg://user?id=${userId}">${cleanName(currentName)}</a>`;
 
                 if (curWarns >= limit) {
                     if (action === "mute") {
@@ -2029,17 +2061,17 @@ groupBot.on("message", async (msg) => {
                         await groupBot.restrictChatMember(chatId, userId, {
                             permissions: { can_send_messages: false }, until_date: until
                         }).catch((e) => { hintNoRights(chatId, e); });
-                        await groupBot.sendMessage(chatId, `🔇 <b>${atName}</b>-কে <b>১ ঘণ্টার জন্য মিউট</b> করা হলো! (গালি: ${curWarns}/${limit})`, { parse_mode: "HTML" });
+                        await groupBot.sendMessage(chatId, `🔇 ${mention}-কে <b>১ ঘণ্টার জন্য মিউট</b> করা হলো! (গালি: ${curWarns}/${limit})`, { parse_mode: "HTML" });
                     } else if (action === "warn") {
-                        await groupBot.sendMessage(chatId, `🚨 <b>${atName}</b>, <b>শেষ ওয়ার্নিং (${curWarns}/${limit})!</b> ${groupConf.warnMsg || "এরপর কঠোর ব্যবস্থা নেওয়া হবে!"}`, { parse_mode: "HTML" });
+                        await groupBot.sendMessage(chatId, `🚨 ${mention}, <b>শেষ ওয়ার্নিং (${curWarns}/${limit})!</b> ${groupConf.warnMsg || "এরপর কঠোর ব্যবস্থা নেওয়া হবে!"}`, { parse_mode: "HTML" });
                     } else {
                         await groupBot.banChatMember(chatId, userId).catch((e) => { hintNoRights(chatId, e); });
-                        await groupBot.sendMessage(chatId, `🚨 <a href="tg://user?id=${userId}">${currentName}</a>-কে <b>গ্রুপ থেকে ব্যান</b> করা হলো! (গালি: ${curWarns}/${limit})`, { parse_mode: "HTML" });
+                        await groupBot.sendMessage(chatId, `🚨 ${mention}-কে <b>গ্রুপ থেকে ব্যান</b> করা হলো! (গালি: ${curWarns}/${limit})`, { parse_mode: "HTML" });
                     }
                     await clearWarn(chatId, userId);
                 } else {
                     const base = groupConf.warnMsg || "ভদ্র ভাষা ব্যবহার করুন!";
-                    const m = await groupBot.sendMessage(chatId, `⚠️ <b>${atName}</b>, ${base} সতর্কতা <b>(${curWarns}/${limit})</b>।`, { parse_mode: "HTML" });
+                    const m = await groupBot.sendMessage(chatId, `⚠️ ${mention}, ${base} সতর্কতা <b>(${curWarns}/${limit})</b>।`, { parse_mode: "HTML" });
                     autoDel(chatId, m.message_id, warnDeleteSec(groupConf));
                 }
                 // Gali DM → admin দের full detail (ke ki bollo)
