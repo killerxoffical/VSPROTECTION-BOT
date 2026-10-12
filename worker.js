@@ -459,6 +459,47 @@ app.post("/api/tg/clear-warn", async (req, res) => {
     }
 });
 
+// Panel theke Group Chat Lock/Unlock (admin /off /on er same kaj — Firestore flag + native mute try)
+app.post("/api/tg/chat-lock", async (req, res) => {
+    const { chatId, locked, botId } = req.body;
+    if (!chatId || typeof locked === "undefined") return res.status(400).json({ ok: false, error: "chatId + locked দিন" });
+    const isLock = locked === true || locked === "true" || locked === 1 || locked === "1";
+    const sender = pickBot(botId) || groupBot;
+    try {
+        await db.collection("tg_groups").doc(chatId.toString()).set({
+            chatOff: isLock,
+            chatOffAt: admin.firestore.FieldValue.serverTimestamp(),
+            chatOffBy: "panel"
+        }, { merge: true });
+        groupConfigs.delete(chatId.toString());
+        // Native Telegram mute try (permission na thakleo delete-enforcement e lock kaj korbe)
+        try {
+            if (isLock) {
+                await sender.setChatPermissions(chatId.toString(), {
+                    can_send_messages: false, can_send_media_messages: false,
+                    can_send_polls: false, can_send_other_messages: false,
+                    can_add_web_page_previews: false
+                });
+            } else {
+                await sender.setChatPermissions(chatId.toString(), {
+                    can_send_messages: true, can_send_media_messages: true,
+                    can_send_polls: true, can_send_other_messages: true,
+                    can_add_web_page_previews: true
+                });
+            }
+        } catch (e) {}
+        try {
+            await sender.sendMessage(chatId.toString(),
+                isLock ? `🔒 <b>Group chat OFF!</b>\n\nAdmin group chat বন্ধ করেছে — এখন শুধু admin রা message দিতে পারবে।\n<i>(খুলতে: admin /on লিখুন)</i>`
+                    : `🔓 <b>Group chat ON!</b>\n\nAdmin group chat খুলে দিয়েছে — সবাই আবার message দিতে পারবে। 🎉`,
+                { parse_mode: "HTML" }).catch(() => {});
+        } catch (e) {}
+        return res.json({ ok: true, message: isLock ? "🔒 Chat locked (OFF)!" : "🔓 Chat unlocked (ON)!" });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
 // Admin ID test DM — oi ID te bot পৌঁছায় কিনা check (connect verify)
 app.post("/api/tg/test-dm", async (req, res) => {
     const { userId, chatId, botId, hello } = req.body;
@@ -893,9 +934,9 @@ async function ownedGroups(uid) {
     } catch (e) { return []; }
 }
 // In-bot panel field meta (toggle / number / text)
-const WIZ_TOGGLES = [["antiLink", "🔗 Anti-Link"], ["antiVideo", "🎥 Anti-Video"], ["antiForward", "📤 Anti-Forward"], ["antiInbox", "📥 Anti-Inbox"], ["antiBot", "🤖 Anti-Bot"], ["antiButton", "🔘 Anti-Button"], ["fakeTitleOn", "🎭 Fake-title"], ["floodOn", "🌊 Flood"]];
+const WIZ_TOGGLES = [["antiLink", "🔗 Anti-Link"], ["antiVideo", "🎥 Anti-Video"], ["antiForward", "📤 Anti-Forward"], ["antiInbox", "📥 Anti-Inbox"], ["antiBot", "🤖 Anti-Bot"], ["antiButton", "🔘 Anti-Button"], ["fakeTitleOn", "🎭 Fake-title"], ["fakeTitleDelete", "🗑️ Fake-title delete"], ["chatOff", "🔒 Chat-Lock (/off)"], ["floodOn", "🌊 Flood"]];
 const WIZ_NUMBERS = [["filterDeleteSec", "Filter warn delete (sec)", 0, 300, 4], ["warnDeleteSec", "Gali warn delete (sec)", 0, 300, 5], ["trigCooldownSec", "Trigger gap (sec)", 0, 300, 15], ["welcomeDeleteSec", "Welcome delete (sec)", 0, 300, 10], ["floodLimit", "Flood limit", 2, 50, 6], ["warnLimit", "Warn limit", 2, 20, 5]];
-const WIZ_TEXTS = [["warnMsg", "Warn message"], ["floodMsg", "Flood message"], ["welcomeMsg", "Welcome text ({name})"], ["adminGaliMsg", "Admin gali reply ({name})"], ["fakeTitleMsg", "Fake-title decline ({name}/{title}/{id})"], ["scammerMsg", "Scammer alert"], ["msgs.forward", "Forward warn"], ["msgs.video", "Video warn"], ["msgs.inbox", "Inbox warn"], ["msgs.link", "Link warn"], ["msgs.button", "Button-ad warn"]];
+const WIZ_TEXTS = [["warnMsg", "Warn message"], ["floodMsg", "Flood message"], ["welcomeMsg", "Welcome text ({name})"], ["adminGaliMsg", "Admin gali reply ({name})"], ["fakeTitleMsg", "Fake-title decline ({name}/{title}/{id})"], ["lockMsg", "Chat-lock warn"], ["scammerMsg", "Scammer alert"], ["msgs.forward", "Forward warn"], ["msgs.video", "Video warn"], ["msgs.inbox", "Inbox warn"], ["msgs.link", "Link warn"], ["msgs.button", "Button-ad warn"]];
 function wizVal(g, key, def) {
     const v = g ? g[key] : undefined;
     if (typeof def === "boolean") return v === true || v === "true" || v === 1;
@@ -903,6 +944,12 @@ function wizVal(g, key, def) {
     return (v === undefined || v === null) ? "" : String(v);
 }
 function onOff(v) { return v ? "🟢 ON" : "🔴 OFF"; }
+// Toggle default: chatOff + antiVideo default OFF, baki sob default ON
+function wizDef(field) {
+    if (field === "antiVideo" || field === "chatOff") return false;
+    if (field === "fakeTitleDelete") return true;
+    return true;
+}
 function wizNumMeta(field) { return WIZ_NUMBERS.find((x) => x[0] === field); }
 function wizTextMeta(field) { return WIZ_TEXTS.find((x) => x[0] === field); }
 // Callback নিরাপত্তা: linked owner + nijer group কিনা
@@ -935,13 +982,15 @@ async function wizEdit(bot, q, text, buttons) {
     try { await bot.answerCallbackQuery(q.id); } catch (e) {}
 }
 async function sendGroupMenu(bot, chatId, g) {
-    const t = `📋 <b>${(g.title || g.id || "").slice(0, 60)}</b>\n<code>${g.id}</code>\n\n🛡️ Link:${onOff(g.antiLink !== false)} Forward:${onOff(g.antiForward !== false)}\n🤬 Warn:${Number(g.warnLimit) || 5}→${g.warnAction || "ban"} ⏱️ Gap:${g.trigCooldownSec !== undefined ? g.trigCooldownSec : 15}s\n⚡ Triggers:${(g.triggers || []).length} 🎉 Welcome:${g.welcomeMode || "global"}\n\nSetting বদলাতে tap করো:`;
+    const lockOn = (g.chatOff === true || g.chatOff === "true" || g.chatOff === 1);
+    const t = `📋 <b>${(g.title || g.id || "").slice(0, 60)}</b>\n<code>${g.id}</code>\n\n🛡️ Link:${onOff(g.antiLink !== false)} Forward:${onOff(g.antiForward !== false)}\n🔒 Chat:${lockOn ? "🔴 OFF (locked)" : "🟢 ON"} 🎭 Fake-title:${onOff(g.fakeTitleOn !== false)}${g.fakeTitleDelete === true ? "+del" : ""}\n🤬 Warn:${Number(g.warnLimit) || 5}→${g.warnAction || "ban"} ⏱️ Gap:${g.trigCooldownSec !== undefined ? g.trigCooldownSec : 15}s\n⚡ Triggers:${(g.triggers || []).length} 👑 Admin-reply:${(g.adminTriggers || []).length} 🎉 Welcome:${g.welcomeMode || "global"}\n\nSetting বদলাতে tap করো:`;
     await bot.sendMessage(chatId, t, {
         parse_mode: "HTML", disable_web_page_preview: true,
         reply_markup: { inline_keyboard: [
             [{ text: "🛡️ Filters", callback_data: `wp_f:${g.id}` }, { text: "⏱️ Timers", callback_data: `wp_n:${g.id}` }],
             [{ text: "💬 Replies", callback_data: `wp_r:${g.id}` }, { text: "🎉 Welcome", callback_data: `wp_w:${g.id}` }],
             [{ text: "⚡ Add reply", callback_data: `wp_trig:${g.id}` }, { text: "🗑 Triggers", callback_data: `wp_tl:${g.id}` }],
+            [{ text: "👑 Add admin-reply", callback_data: `wp_atrig:${g.id}` }, { text: "🗑 Admin-replies", callback_data: `wp_atl:${g.id}` }],
             [{ text: "📊 Info", callback_data: `wp_i:${g.id}` }, { text: "🔙 Groups", callback_data: `wp_back` }]
         ]}
     }).catch(() => {});
@@ -970,7 +1019,7 @@ async function wizCallback(bot, q) {
         const c = await wizCheck(bot, q, gid);
         if (!c) return;
         await wizEdit(bot, q, `🛡️ <b>Filters</b> — tap = ON/OFF:`, [
-            ...WIZ_TOGGLES.map(([f, label]) => ([{ text: `${label} ${onOff(wizVal(c.g, f, f !== "antiVideo"))}`, callback_data: `wp_tgl:${gid}:${f}` }])),
+            ...WIZ_TOGGLES.map(([f, label]) => ([{ text: `${label} ${onOff(wizVal(c.g, f, wizDef(f)))}`, callback_data: `wp_tgl:${gid}:${f}` }])),
             [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
         ]);
         return;
@@ -980,7 +1029,7 @@ async function wizCallback(bot, q) {
         if (!WIZ_TOGGLES.some(([f]) => f === field)) { await ack("Unknown!"); return; }
         const c = await wizCheck(bot, q, gid);
         if (!c) return;
-        const cur = wizVal(c.g, field, field !== "antiVideo");
+        const cur = wizVal(c.g, field, wizDef(field));
         try { await db.collection("tg_groups").doc(String(gid)).set({ [field]: !cur }, { merge: true }); } catch (e) {}
         groupConfigs.delete(String(gid));
         try {
@@ -988,7 +1037,7 @@ async function wizCallback(bot, q) {
             const g2 = { id: gd.id, ...(gd.exists ? gd.data() : {}) };
             groupConfigs.set(g2.id, gd.exists ? gd.data() : {});
             await wizEdit(bot, q, `🛡️ <b>Filters</b> — tap = ON/OFF:`, [
-                ...WIZ_TOGGLES.map(([f, label]) => ([{ text: `${label} ${onOff(wizVal(g2, f, f !== "antiVideo"))}`, callback_data: `wp_tgl:${gid}:${f}` }])),
+                ...WIZ_TOGGLES.map(([f, label]) => ([{ text: `${label} ${onOff(wizVal(g2, f, wizDef(f)))}`, callback_data: `wp_tgl:${gid}:${f}` }])),
                 [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
             ]);
         } catch (e) { await ack("Saved ✅"); }
@@ -1093,6 +1142,43 @@ async function wizCallback(bot, q) {
         }
         return;
     }
+    if (kind === "wp_atrig") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        wizMap.set(q.from.id.toString(), { step: "kw", groupId: String(gid), action: "atrig", data: {}, at: Date.now() });
+        await ack();
+        await bot.sendMessage(q.message.chat.id, `👑 <b>নতুন admin-reply</b> (শুধু admin লিখলে reply যাবে)\n\n1️⃣ Keyword পাঠাও (admin যা লিখবে, যেমন <code>!price</code>):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+        return;
+    }
+    if (kind === "wp_atl") {
+        const c = await wizCheck(bot, q, gid);
+        if (!c) return;
+        const arr = c.g.adminTriggers || [];
+        await wizEdit(bot, q, `👑 <b>Admin-replies</b> (${arr.length}) — ❌ = delete:`, [
+            ...arr.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}`, callback_data: `wp_adel:${gid}:${i}` }])),
+            [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+        ]);
+        return;
+    }
+    if (kind === "wp_adel") {
+        const idx = Number(parts[2]);
+        const c = await wizCheck(bot, q, gid);
+        if (!c || !isFinite(idx)) return;
+        const arr = (c.g.adminTriggers || []).slice();
+        arr.splice(idx, 1);
+        try { await db.collection("tg_groups").doc(String(gid)).update({ adminTriggers: arr }); } catch (e) {}
+        groupConfigs.delete(String(gid));
+        await ack("Deleted ✅");
+        const c2 = await wizCheck(bot, q, gid);
+        if (c2) {
+            const a2 = c2.g.adminTriggers || [];
+            await wizEdit(bot, q, `👑 <b>Admin-replies</b> (${a2.length}):`, [
+                ...a2.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}`, callback_data: `wp_adel:${gid}:${i}` }])),
+                [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
+            ]);
+        }
+        return;
+    }
     if (kind === "wp_i") {
         const c = await wizCheck(bot, q, gid);
         if (!c) return;
@@ -1147,7 +1233,9 @@ async function wizTextStep(bot, fromUser, w, text) {
         await bot.sendMessage(uid, `✅ <b>Saved!</b> Bot ekhuni notun setting e cholbe।\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
         return;
     }
-    if (w.action === "trig") {
+    if (w.action === "trig" || w.action === "atrig") {
+        const isA = w.action === "atrig";
+        const arrKey = isA ? "adminTriggers" : "triggers";
         if (w.step === "kw") {
             if (!clean || clean.length > 60) {
                 await bot.sendMessage(uid, `❌ 1-60 অক্ষরের keyword দাও! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
@@ -1155,7 +1243,7 @@ async function wizTextStep(bot, fromUser, w, text) {
             }
             w.data.kw = clean; w.step = "reply"; w.at = Date.now();
             wizMap.set(uid, w);
-            await bot.sendMessage(uid, `2️⃣ Reply message পাঠাও (user কী দেখবে):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+            await bot.sendMessage(uid, `2️⃣ Reply message পাঠাও (${isA ? "admin লিখলে সবাই" : "user"} কী দেখবে):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
             return;
         }
         if (w.step === "reply") {
@@ -1180,12 +1268,12 @@ async function wizTextStep(bot, fromUser, w, text) {
                 await bot.sendMessage(uid, `❌ Group পাওয়া যায়নি!`, { parse_mode: "HTML" }).catch(() => {});
                 return;
             }
-            const arr = ((gd.data() || {}).triggers || []).slice();
+            const arr = ((gd.data() || {})[arrKey] || []).slice();
             arr.push({ keyword: w.data.kw, reply: w.data.reply, deleteSec: n });
-            try { await db.collection("tg_groups").doc(String(w.groupId)).update({ triggers: arr }); } catch (e) {}
+            try { await db.collection("tg_groups").doc(String(w.groupId)).update({ [arrKey]: arr }); } catch (e) {}
             groupConfigs.delete(String(w.groupId));
             wizMap.delete(uid);
-            await bot.sendMessage(uid, `✅ <b>Trigger saved!</b>\n🔑 <code>${w.data.kw}</code> → reply + ${n}s delete\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
+            await bot.sendMessage(uid, `✅ <b>${isA ? "Admin-reply" : "Trigger"} saved!</b>\n🔑 <code>${w.data.kw}</code> → reply + ${n}s delete${isA ? " (শুধু admin লিখলে)" : ""}\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
             return;
         }
     }
@@ -1203,7 +1291,9 @@ const CFG_DEFAULTS = {
     nameTrackOn: true, leaveLogOn: true, liveNotifyOn: true, galiDmOn: true,
     notifyAdmins: [], adminGaliMsg: "",
     welcomeMode: "global", welcomeMsg: "", welcomeImg: "", welcomeDeleteSec: 10,
-    trigCooldownSec: 15
+    trigCooldownSec: 15,
+    chatOff: false, lockMsg: "",
+    fakeTitleDelete: true
 };
 function cfgNum(conf, key, def, min, max) {
     const v = Number(conf ? conf[key] : undefined);
@@ -1392,7 +1482,9 @@ groupBot.on("my_chat_member", async (msg) => {
                 customTitles: [],
                 fakeTitleMsg: "",
                 fakeTitleDeleteSec: 0,
-                fakeTitleDelete: false,
+                fakeTitleDelete: true,
+                chatOff: false,
+                lockMsg: "",
                 useDefaultBadWords: true,
                 customBadWords: [],
                 filterDeleteSec: 4,
@@ -1833,21 +1925,51 @@ groupBot.on("message", async (msg) => {
             return;
         }
 
-        // Mod commands — group থেকেই ban/unban/kick/mute/warn (panel খোলা লাগে না, admin only)
-        // reply দিয়ে: /ban /kick | reply বা ID দিয়ে: /unban /mute /unmute /warn /warns
+        // Mod commands — group থেকেই ban/unban/kick/mute/unmute/warn/unwarn (panel খোলা লাগে না, admin only)
+        // Target: reply / @mention / tap-mention / ID — sob chole. Ex: /warn @user, /mute @user 30, /warns
         if (isCommand(text, "/ban") || isCommand(text, "/unban") || isCommand(text, "/kick") ||
             isCommand(text, "/mute") || isCommand(text, "/unmute") ||
-            isCommand(text, "/warn") || isCommand(text, "/warns")) {
+            isCommand(text, "/warn") || isCommand(text, "/warns") ||
+            isCommand(text, "/unwarn") || isCommand(text, "/removewarn") ||
+            isCommand(text, "/resetwarn") || isCommand(text, "/clearwarn")) {
             if (!isAdmin) {
                 const w = await groupBot.sendMessage(chatId, `⚠️ এই কমান্ড কেবল গ্রুপ এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId });
                 autoDel(chatId, w.message_id, warnDeleteSec(groupConf));
                 return;
             }
-            const getTarget = () => {
+            // Target resolver: 1) reply 2) tap-mention entity 3) @username 4) numeric ID
+            const getTarget = async () => {
                 if (msg.reply_to_message && msg.reply_to_message.from) {
                     const tu = msg.reply_to_message.from;
                     return { id: tu.id.toString(), name: `${tu.first_name || ""} ${tu.last_name || ""}`.trim() || tu.id.toString() };
                 }
+                try {
+                    const ents = msg.entities || msg.caption_entities || [];
+                    for (const e of ents) {
+                        if (e && e.type === "text_mention" && e.user && e.user.id) {
+                            const tu = e.user;
+                            return { id: String(tu.id), name: `${tu.first_name || ""} ${tu.last_name || ""}`.trim() || String(tu.id) };
+                        }
+                    }
+                } catch (e) {}
+                try {
+                    const m = (text || "").match(/@([A-Za-z0-9_]{3,})/);
+                    if (m) {
+                        const un = m[1].toLowerCase();
+                        const snap = await db.collection("tg_members").where("chatId", "==", chatId).limit(200).get().catch(() => null);
+                        if (snap) {
+                            let found = null;
+                            snap.forEach((d) => {
+                                if (found) return;
+                                const v = d.data() || {};
+                                const vu = String(v.username || "").toLowerCase().replace(/^@/, "");
+                                if (vu === un && v.userId) found = { id: String(v.userId), name: v.name || ("@" + m[1]) };
+                            });
+                            if (found && /^\d{5,}$/.test(found.id)) return found;
+                        }
+                        return { id: "", name: "@" + m[1], notFound: true };
+                    }
+                } catch (e) {}
                 const parts = (text || "").split(/\s+/);
                 for (let i = 1; i < parts.length; i++) {
                     const dig = parts[i].replace(/[^0-9]/g, "");
@@ -1855,59 +1977,197 @@ groupBot.on("message", async (msg) => {
                 }
                 return null;
             };
-            const tgt = getTarget();
-            if (!tgt && (isCommand(text, "/ban") || isCommand(text, "/kick") || isCommand(text, "/mute") || isCommand(text, "/warn") || (isCommand(text, "/warns") && msg.reply_to_message))) {
-                await groupBot.sendMessage(chatId, `💡 যাকে শাস্তি দেবে তাকে <b>reply</b> দিয়ে কমান্ড দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+            const tgt = await getTarget();
+            // @mention দিলে কিন্তু user kokhono message দেয়নি (ID resolve হয়নি)
+            if (tgt && tgt.notFound) {
+                await groupBot.sendMessage(chatId, `❌ <b>${cleanName(tgt.name)}</b> কে member list-এ পাওয়া যায়নি!\nতাকে গ্রুপে একবার message দিতে বলো — তারপর <b>reply</b> / <b>@mention</b> / <b>ID</b> দিয়ে আবার দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId });
                 return;
             }
+            if (!tgt && !isCommand(text, "/warns")) {
+                await groupBot.sendMessage(chatId, `💡 যার উপর চালাবে তাকে <b>reply</b> দাও, <b>@mention</b> করো বা <b>ID</b> লিখো।\nযেমন: <code>/warn @username</code>`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                return;
+            }
+            // Admin / bot nijeke shasti deoa jabe na (punitive commands)
+            if (tgt && (isCommand(text, "/ban") || isCommand(text, "/kick") || isCommand(text, "/mute") || isCommand(text, "/warn"))) {
+                let prot = "";
+                try {
+                    const me = await groupBot.getMe().catch(() => null);
+                    if (me && String(tgt.id) === String(me.id)) prot = "bot";
+                } catch (e) {}
+                if (!prot && /^\d+$/.test(String(tgt.id || ""))) {
+                    try {
+                        const tm = await groupBot.getChatMember(chatId, tgt.id);
+                        if (tm && (tm.status === "creator" || tm.status === "administrator")) prot = "admin";
+                    } catch (e) {}
+                }
+                if (prot === "bot") {
+                    await groupBot.sendMessage(chatId, `😅 আমাকে শাস্তি দেওয়া যাবে না!`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                    return;
+                }
+                if (prot === "admin") {
+                    await groupBot.sendMessage(chatId, `⚠️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a> group <b>admin</b> — admin দের শাস্তি দেওয়া যায় না!`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                    return;
+                }
+            }
             if (isCommand(text, "/ban")) {
-                await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
-                await groupBot.sendMessage(chatId, `🔨 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>ব্যান</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+                const ok = await groupBot.banChatMember(chatId, tgt.id).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
+                await groupBot.sendMessage(chatId, ok ? `🔨 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>ব্যান</b> করা হলো!` : `❌ ব্যান করা যায়নি — bot কে <b>Admin</b> (Ban permission) বানানো আছে কিনা দেখো।`, { parse_mode: "HTML" }).catch(() => {});
             } else if (isCommand(text, "/unban")) {
-                if (!tgt) { await groupBot.sendMessage(chatId, `💡 <code>/unban USER_ID</code> — ID দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId }); return; }
-                await groupBot.unbanChatMember(chatId, tgt.id, { only_if_banned: true }).catch((e) => { hintNoRights(chatId, e); });
-                await groupBot.sendMessage(chatId, `✅ <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>আনব্যান</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+                const ok = await groupBot.unbanChatMember(chatId, tgt.id, { only_if_banned: true }).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
+                await groupBot.sendMessage(chatId, ok ? `✅ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>আনব্যান</b> করা হলো!` : `❌ আনব্যান করা যায়নি — bot permission দেখো।`, { parse_mode: "HTML" }).catch(() => {});
             } else if (isCommand(text, "/kick")) {
-                await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
-                await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
-                await groupBot.sendMessage(chatId, `👢 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>কিক</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+                const ok = await groupBot.banChatMember(chatId, tgt.id).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
+                if (ok) await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
+                await groupBot.sendMessage(chatId, ok ? `👢 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>কিক</b> করা হলো!` : `❌ কিক করা যায়নি — bot কে <b>Admin</b> (Ban permission) বানানো আছে কিনা দেখো।`, { parse_mode: "HTML" }).catch(() => {});
             } else if (isCommand(text, "/mute")) {
-                const parts = (text || "").split(/\s+/);
+                // Duration: plain minute (30) ba 30m / 2h / 1d — target ID token skip হয়
                 let mins = 60;
-                for (let i = 1; i < parts.length; i++) { const n = parseInt(parts[i].replace(/[^0-9]/g, ""), 10); if (isFinite(n) && n > 0 && n <= 10080) { mins = n; break; } }
-                await groupBot.restrictChatMember(chatId, tgt.id, {
+                const mparts = (text || "").split(/\s+/);
+                for (let i = 1; i < mparts.length; i++) {
+                    const tok = mparts[i].trim();
+                    if (!tok || tok.startsWith("@")) continue;
+                    const dig = tok.replace(/[^0-9]/g, "");
+                    if (!dig || (dig === String(tgt.id) && dig.length >= 5)) continue;
+                    let n = parseInt(dig, 10);
+                    if (!isFinite(n) || n <= 0) continue;
+                    const low = tok.toLowerCase();
+                    if (low.endsWith("d")) n = n * 1440;
+                    else if (low.endsWith("h")) n = n * 60;
+                    if (n >= 1 && n <= 10080) { mins = n; break; }
+                }
+                const ok = await groupBot.restrictChatMember(chatId, tgt.id, {
                     permissions: { can_send_messages: false },
                     until_date: Math.floor(Date.now() / 1000) + mins * 60
-                }).catch((e) => { hintNoRights(chatId, e); });
-                await groupBot.sendMessage(chatId, `🔇 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>${mins} মিনিট মিউট</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+                }).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
+                const durTxt = mins % 1440 === 0 ? `${mins / 1440} দিন` : mins % 60 === 0 ? `${mins / 60} ঘণ্টা` : `${mins} মিনিট`;
+                await groupBot.sendMessage(chatId, ok ? `🔇 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>${durTxt} মিউট</b> করা হলো!` : `❌ মিউট করা যায়নি — bot কে <b>Admin</b> (Restrict permission) বানানো আছে কিনা দেখো।`, { parse_mode: "HTML" }).catch(() => {});
             } else if (isCommand(text, "/unmute")) {
-                if (!tgt) { await groupBot.sendMessage(chatId, `💡 <code>/unmute USER_ID</code> — ID দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId }); return; }
-                await groupBot.restrictChatMember(chatId, tgt.id, {
+                const ok = await groupBot.restrictChatMember(chatId, tgt.id, {
                     permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true }
-                }).catch((e) => { hintNoRights(chatId, e); });
-                await groupBot.sendMessage(chatId, `🔊 <a href="tg://user?id=${tgt.id}">${tgt.name}</a>-কে <b>আনমিউট</b> করা হলো!`, { parse_mode: "HTML" }).catch(() => {});
+                }).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
+                await groupBot.sendMessage(chatId, ok ? `🔊 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>আনমিউট</b> করা হলো!` : `❌ আনমিউট করা যায়নি — bot permission দেখো।`, { parse_mode: "HTML" }).catch(() => {});
             } else if (isCommand(text, "/warn")) {
                 const wOwner = await getFreshOwner(chatId, groupConf);
                 const n = (await getWarnCount(chatId, tgt.id)) + 1;
                 await setWarnCount(chatId, tgt.id, n, wOwner);
                 const limit = Math.max(2, Number(groupConf.warnLimit) || 5);
-                await groupBot.sendMessage(chatId, `⚠️ <a href="tg://user?id=${tgt.id}">${tgt.name}</a> ওয়ার্ন <b>(${n}/${limit})</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                // Reason: command + target token (@mention/ID) বাদে বাকি লেখা
+                const rsn = (text || "").split(/\s+/).slice(1).filter((p) => {
+                    if (!p || p.startsWith("@")) return false;
+                    const d = p.replace(/[^0-9]/g, "");
+                    if (d && d === String(tgt.id) && d.length >= 5) return false;
+                    return true;
+                }).join(" ").slice(0, 120);
+                await groupBot.sendMessage(chatId, `⚠️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a> ওয়ার্ন <b>(${n}/${limit})</b>${rsn ? ` — <i>${cleanName(rsn)}</i>` : ""}`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
                 if (n >= limit) {
                     const action = groupConf.warnAction || "ban";
                     if (action === "mute") {
                         await groupBot.restrictChatMember(chatId, tgt.id, { permissions: { can_send_messages: false }, until_date: Math.floor(Date.now() / 1000) + 3600 }).catch((e) => { hintNoRights(chatId, e); });
+                        await groupBot.sendMessage(chatId, `🔇 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>১ ঘণ্টার জন্য মিউট</b> করা হলো! (ওয়ার্ন: ${n}/${limit})`, { parse_mode: "HTML" }).catch(() => {});
+                    } else if (action === "kick") {
+                        await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
+                        await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
+                        await groupBot.sendMessage(chatId, `👢 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>কিক</b> করা হলো! (ওয়ার্ন: ${n}/${limit})`, { parse_mode: "HTML" }).catch(() => {});
                     } else if (action !== "warn") {
                         await groupBot.banChatMember(chatId, tgt.id).catch((e) => { hintNoRights(chatId, e); });
+                        await groupBot.sendMessage(chatId, `🚨 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>ব্যান</b> করা হলো! (ওয়ার্ন: ${n}/${limit})`, { parse_mode: "HTML" }).catch(() => {});
                     }
                     await clearWarn(chatId, tgt.id);
                 }
+            } else if (isCommand(text, "/unwarn") || isCommand(text, "/removewarn")) {
+                const cur = await getWarnCount(chatId, tgt.id);
+                if (cur <= 0) {
+                    await groupBot.sendMessage(chatId, `✅ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর কোনো ওয়ার্ন নেই (0)।`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                } else {
+                    const left = cur - 1;
+                    if (left <= 0) await clearWarn(chatId, tgt.id);
+                    else await setWarnCount(chatId, tgt.id, left, await getFreshOwner(chatId, groupConf));
+                    await groupBot.sendMessage(chatId, `↩️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর ১টা ওয়ার্ন কমানো হলো — বাকি <b>${Math.max(0, left)}</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                }
+            } else if (isCommand(text, "/resetwarn") || isCommand(text, "/clearwarn")) {
+                await clearWarn(chatId, tgt.id);
+                await groupBot.sendMessage(chatId, `🗑️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর সব ওয়ার্ন <b>clear</b> করা হলো!`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
             } else if (isCommand(text, "/warns")) {
                 const qid = tgt ? tgt.id : fromUser.id.toString();
                 const qn = tgt ? tgt.name : currentName;
                 const c = await getWarnCount(chatId, qid);
-                await groupBot.sendMessage(chatId, `📋 <a href="tg://user?id=${qid}">${qn}</a>-এর ওয়ার্ন: <b>${c}</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                await groupBot.sendMessage(chatId, `📋 <a href="tg://user?id=${qid}">${cleanName(qn)}</a>-এর ওয়ার্ন: <b>${c}</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
             }
             return;
+        }
+
+        // 🔒 Group Chat Lock — admin /off = chat OFF (sob member mute), /on = chat ON
+        if (isCommand(text, "/off") || isCommand(text, "/lock") || isCommand(text, "/chatoff") ||
+            isCommand(text, "/on") || isCommand(text, "/unlock") || isCommand(text, "/chaton")) {
+            const wantLock = isCommand(text, "/off") || isCommand(text, "/lock") || isCommand(text, "/chatoff");
+            if (!isAdmin) {
+                const w = await groupBot.sendMessage(chatId, `⚠️ এই কমান্ড কেবল গ্রুপ এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => null);
+                if (w) autoDel(chatId, w.message_id, warnDeleteSec(groupConf));
+                return;
+            }
+            try {
+                await db.collection("tg_groups").doc(chatId).set({
+                    chatOff: wantLock,
+                    chatOffAt: admin.firestore.FieldValue.serverTimestamp(),
+                    chatOffBy: fromUser.id.toString()
+                }, { merge: true });
+            } catch (e) {}
+            groupConf.chatOff = wantLock;
+            groupConfigs.set(chatId, groupConf);
+            // Native Telegram mute/unmute try (fail holeo delete-enforcement e lock cholbe)
+            try {
+                if (wantLock) {
+                    await groupBot.setChatPermissions(chatId, {
+                        can_send_messages: false, can_send_media_messages: false,
+                        can_send_polls: false, can_send_other_messages: false,
+                        can_add_web_page_previews: false
+                    }).catch((e) => { hintNoRights(chatId, e); });
+                } else {
+                    await groupBot.setChatPermissions(chatId, {
+                        can_send_messages: true, can_send_media_messages: true,
+                        can_send_polls: true, can_send_other_messages: true,
+                        can_add_web_page_previews: true
+                    }).catch((e) => { hintNoRights(chatId, e); });
+                }
+            } catch (e) {}
+            await groupBot.sendMessage(chatId,
+                wantLock
+                    ? `🔒 <b>Group chat OFF!</b>\n\nAdmin chat বন্ধ করেছে — এখন শুধু admin রা message দিতে পারবে।\n<i>(খুলতে: admin /on লিখুন)</i>`
+                    : `🔓 <b>Group chat ON!</b>\n\nAdmin chat খুলে দিয়েছে — সবাই আবার message দিতে পারবে। 🎉`,
+                { parse_mode: "HTML" }).catch(() => {});
+            return;
+        }
+
+        // 👑 Admin-only auto-reply (panel → Triggers → Admin Replies):
+        // shudhu admin likhle reply jabe. Match = puro keyword / keyword + space / keyword@bot
+        if (isAdmin && text && groupConf && Array.isArray(groupConf.adminTriggers) && groupConf.adminTriggers.length > 0) {
+            const cleanAdmin = text.toLowerCase().trim();
+            for (const at of groupConf.adminTriggers) {
+                const kw = ((at && at.keyword) || "").toLowerCase().trim();
+                if (!kw) continue;
+                if (cleanAdmin === kw || cleanAdmin.startsWith(kw + " ") || cleanAdmin.startsWith(kw + "@")) {
+                    if (at.hideCmd) await delMsg(chatId, msgId);
+                    const built = buildTriggerMarkup(at);
+                    const sendOpts = {
+                        reply_to_message_id: at.hideCmd ? undefined : msgId,
+                        parse_mode: "HTML",
+                        disable_web_page_preview: true
+                    };
+                    if (built.markup) sendOpts.reply_markup = built.markup;
+                    groupBot.sendMessage(chatId, at.reply || "✅", sendOpts).then((sent) => {
+                        try {
+                            const tdel = cfgNum(at, "deleteSec", 0, 0, 300);
+                            if (sent && sent.message_id && tdel > 0) autoDel(chatId, sent.message_id, tdel);
+                        } catch (e) {}
+                    }).catch(() => {
+                        const retry = { disable_web_page_preview: true };
+                        if (!at.hideCmd) retry.reply_to_message_id = msgId;
+                        if (built.markup) retry.reply_markup = built.markup;
+                        groupBot.sendMessage(chatId, at.reply || "✅", retry).catch(() => {});
+                    });
+                    break;
+                }
+            }
         }
 
         // Name Change Tracker (English auto) + Scammer Alert (admin + member sobar jonno)
@@ -1955,6 +2215,25 @@ groupBot.on("message", async (msg) => {
         // এডমিন মেসেজে কোনো ফিল্টার চলবে না (command/tracker sesh, ekhon return)
         if (isAdmin) return;
 
+        // 🔒 Chat OFF থাকলে non-admin এর SOB message silent delete (text/photo/sticker/video sob)
+        if (cfgBool(groupConf, "chatOff", false)) {
+            await delMsg(chatId, msgId);
+            // Optional warn (panel theke lockMsg dile) — nahole silent, spam hobe na
+            const lm = (groupConf.lockMsg || "").toString().trim().slice(0, 300);
+            if (lm) {
+                const lk = chatId + ":lockwarn";
+                const lastLw = trigCool.get(lk) || 0;
+                if (Date.now() - lastLw > 15000) {
+                    trigCool.set(lk, Date.now());
+                    const w = await groupBot.sendMessage(chatId,
+                        `🔒 <b>@${fromUser.username || fromUser.first_name}</b>, ${lm}`,
+                        { parse_mode: "HTML" }).catch(() => null);
+                    if (w) autoDel(chatId, w.message_id, filterDeleteSec(groupConf));
+                }
+            }
+            return;
+        }
+
         // ০. ফ্লাড কন্ট্রোল (customize: floodOn/Limit/Window/Mute + msg + delete-sec)
         // Anonymous admin (sender_chat) ke flood e dhorbe na
         if (cfgBool(groupConf, "floodOn", true) && !isAnonymousAdmin && !msg.sender_chat) {
@@ -1997,7 +2276,7 @@ groupBot.on("message", async (msg) => {
                 return;
             }
             // ০.৭ Fake staff-title block (name/username e owner-admin-moderator,
-            // kintu real admin na → reply warn; offender message by default THAKBE)
+            // kintu real admin na → decline + panel ON থাকলে message DELETE)
             if (cfgBool(groupConf, "fakeTitleOn", true)) {
                 const hit = fakeTitleHit(currentName, currentUsername, groupConf);
                 if (hit) {
@@ -2008,11 +2287,11 @@ groupBot.on("message", async (msg) => {
                     const dm = await groupBot.sendMessage(chatId, body, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(async () => {
                         return groupBot.sendMessage(chatId, body.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => null);
                     });
-                    if (cfgBool(groupConf, "fakeTitleDelete", false)) await delMsg(chatId, msgId);
+                    if (cfgBool(groupConf, "fakeTitleDelete", true)) await delMsg(chatId, msgId);
                     const ds = cfgNum(groupConf, "fakeTitleDeleteSec", 0, 0, 300);
                     if (dm) autoDel(chatId, dm.message_id, ds);
                     // Fake-title DM + log — admin jante pare ke ki bollo, delete holo kina
-                    const fdel = cfgBool(groupConf, "fakeTitleDelete", false);
+                    const fdel = cfgBool(groupConf, "fakeTitleDelete", true);
                     try {
                         if (cfgBool(groupConf, "galiDmOn", true)) {
                             const short = String(text || "").slice(0, 300);
