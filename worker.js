@@ -132,6 +132,41 @@ function isInboxText(text) {
     for (const w of INBOX_WORDS) { if (wordHit(t, w)) return true; }
     return false;
 }
+// Link whitelist (glitch fix): age plain includes() ছিল — "google.com" whitelist
+// থাকলে "notgoogle.com"-ও allow হয়ে যেত। Ekhon bare-domain entry hostname-এ
+// মেলে (subdomain সহ), path-entry (t.me/mychannel) substring-এ মেলে।
+function hostOf(u) {
+    try {
+        const h = new URL(/^https?:\/\//i.test(u) ? u : "https://" + u).hostname.toLowerCase();
+        return h.replace(/^\.+|\.+$/g, "");
+    } catch (e) { return ""; }
+}
+function findUrls(text) {
+    const out = [];
+    const re = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+|t\.me\/[^\s<>"']+)/gi;
+    let m;
+    while ((m = re.exec(text || ""))) out.push(m[1]);
+    return out;
+}
+function linkAllowed(text, whitelist) {
+    const low = (text || "").toLowerCase();
+    const wl = (Array.isArray(whitelist) ? whitelist : [])
+        .map((w) => String(w || "").toLowerCase().trim().replace(/^https?:\/\//, "").replace(/^www\./, ""))
+        .filter(Boolean);
+    if (!wl.length) return false;
+    for (const w of wl) {
+        if (w.includes("/") && low.includes(w)) return true;
+    }
+    for (const u of findUrls(text)) {
+        const h = hostOf(u);
+        if (!h) continue;
+        for (const w of wl) {
+            if (w.includes("/")) continue;
+            if (h === w || h.endsWith("." + w)) return true;
+        }
+    }
+    return false;
+}
 // Spaced/dotted single-letter evasion join ("F.U.C.K"→fuck, "f u c k"→fuck).
 // Shudhu single/short part thakle join হয় — "tumar bolo"/"kom chilo" untouched.
 function joinSpacedSingles(text) {
@@ -995,9 +1030,12 @@ async function clearWarn(chatId, userId) {
 }
 
 // ---------------- 8. ADMIN CHECK ----------------
+// NOTE: multi-bot group e DEFAULT bot diye check korle fail kore (se bot group e
+// nao thakte pare) — tai caller nijer bot instance pathabe. Real admin ke
+// member vebe filter/delete korai chilo custom-bot group er boro glitch.
 const groupAdminCache = new Map(); // chatId -> { admins: Set, time: number }
 
-async function isGroupAdmin(chatId, fromUser, msg) {
+async function isGroupAdmin(chatId, fromUser, msg, botInst) {
     if (!fromUser) return false;
 
     // ১. অ্যানোনিমাস এডমিন বা চ্যানেলের নামে মেসেজ পাঠালে ১০০% এডমিন
@@ -1009,6 +1047,7 @@ async function isGroupAdmin(chatId, fromUser, msg) {
     }
 
     const userId = fromUser.id.toString();
+    const api = botInst || groupBot;
 
     // ২. মেমোরি ক্যাশ চেক (প্রতি ৫ মিনিটে ১ বার রিফ্রেশ, রেট লিমিট প্রটেকশন)
     const cached = groupAdminCache.get(chatId);
@@ -1017,14 +1056,14 @@ async function isGroupAdmin(chatId, fromUser, msg) {
     }
 
     try {
-        const adminList = await groupBot.getChatAdministrators(chatId);
+        const adminList = await api.getChatAdministrators(chatId);
         const adminSet = new Set(adminList.map(a => a.user.id.toString()));
         groupAdminCache.set(chatId, { admins: adminSet, time: Date.now() });
         return adminSet.has(userId);
     } catch (e) {
         if (cached && cached.admins.has(userId)) return true;
         try {
-            const m = await groupBot.getChatMember(chatId, fromUser.id);
+            const m = await api.getChatMember(chatId, fromUser.id);
             return m.status === "creator" || m.status === "administrator";
         } catch (err) {
             return false;
@@ -1756,7 +1795,9 @@ function buildTriggerMarkup(trig) {
 }
 
 // ---------------- 9. MASTER MESSAGE FILTER ----------------
-groupBot.on("message", async (msg) => {
+// Edit kore gali/link dhokano (edited-message bypass) বন্ধ — message + edited
+// message একই engine-এ চলে। Edit-এ flood count হয় না (notun message na)।
+async function onGroupUpdate(msg, isEdit) {
     try {
         if (!msg.chat) return;
         const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -1931,7 +1972,8 @@ groupBot.on("message", async (msg) => {
         db.collection("tg_groups").doc(chatId).set(syncDoc, { merge: true }).catch(() => {});
 
         // Member directory: sob sender er chat id collect (panel Send box er jonno)
-        trackMember(chatId, fromUser.id.toString(), currentName, currentUsername, groupConf.ownerUid || "").catch(() => {});
+        // Edit-এ count বাড়ে না (notun message na)
+        if (!isEdit) trackMember(chatId, fromUser.id.toString(), currentName, currentUsername, groupConf.ownerUid || "").catch(() => {});
 
         // Leave log (customize: leaveLogOn)
         if (msg.left_chat_member) {
@@ -1945,7 +1987,7 @@ groupBot.on("message", async (msg) => {
             return;
         }
 
-        const isAdmin = await isGroupAdmin(chatId, fromUser, msg);
+        const isAdmin = await isGroupAdmin(chatId, fromUser, msg, groupBot);
 
         // Admin ID auto-collect (live/gali DM যাবে) — 24h te 1 bar write + hello DM
         if (isAdmin && fromUser && !isAnonymousAdmin && !fromUser.is_bot) {
@@ -2391,8 +2433,8 @@ groupBot.on("message", async (msg) => {
         }
 
         // ০. ফ্লাড কন্ট্রোল (customize: floodOn/Limit/Window/Mute + msg + delete-sec)
-        // Anonymous admin (sender_chat) ke flood e dhorbe na
-        if (cfgBool(groupConf, "floodOn", true) && !isAnonymousAdmin && !msg.sender_chat) {
+        // Anonymous admin (sender_chat) ke flood e dhorbe na; edit notun message na tai count hoy na
+        if (!isEdit && cfgBool(groupConf, "floodOn", true) && !isAnonymousAdmin && !msg.sender_chat) {
             const fWin = cfgNum(groupConf, "floodWindowSec", 10, 3, 120) * 1000;
             const fLim = cfgNum(groupConf, "floodLimit", 6, 2, 50);
             const fMuteAt = cfgNum(groupConf, "floodMuteCount", 10, 3, 100);
@@ -2508,8 +2550,9 @@ groupBot.on("message", async (msg) => {
                 return;
             }
 
-            // ২. ভিডিও ব্লক
-            if (groupConf.antiVideo && (msg.video || msg.video_note)) {
+            // ২. ভিডিও ব্লক (file/document হিসেবে পাঠানো video-ও ধরে)
+            const docMime = (msg.document && msg.document.mime_type) ? String(msg.document.mime_type) : "";
+            if (groupConf.antiVideo && (msg.video || msg.video_note || docMime.startsWith("video/"))) {
                 await delMsg(chatId, msgId);
                 const vidMsg = (groupConf.msgs && groupConf.msgs.video) || "গ্রুপে ভিডিও পাঠানো নিষেধ!";
                 const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${vidMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
@@ -2528,10 +2571,7 @@ groupBot.on("message", async (msg) => {
 
             // ৪. অ্যান্টি-লিংক (whitelist e thakle allow, nahole sob block)
             if (groupConf.antiLink !== false && (text.includes("t.me/") || text.includes("http://") || text.includes("https://") || text.includes("www."))) {
-                const wl = (Array.isArray(groupConf.linkWhitelist) && groupConf.linkWhitelist.length)
-                    ? groupConf.linkWhitelist
-                    : [];
-                const allowed = wl.length > 0 && wl.some((w) => w && text.toLowerCase().includes(String(w).toLowerCase()));
+                const allowed = linkAllowed(text, groupConf.linkWhitelist);
                 if (!allowed) {
                     await delMsg(chatId, msgId);
                     const linkMsg = (groupConf.msgs && groupConf.msgs.link) || "অননুমোদিত লিংক দেওয়া নিষেধ!";
@@ -2603,7 +2643,9 @@ groupBot.on("message", async (msg) => {
     } catch (e) {
         console.error("[GROUP MSG ERR]:", e.message);
     }
-});
+}
+groupBot.on("message", async (msg) => { await onGroupUpdate(msg, false); });
+groupBot.on("edited_message", async (msg) => { await onGroupUpdate(msg, true); });
 
 // ---------------- 10. WELCOME ----------------
 groupBot.on("new_chat_members", async (msg) => {
