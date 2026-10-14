@@ -213,3 +213,15 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - ছোট word এখন শুধু **আলাদা** থাকলে ধরে: ইকবাল/Iqbal, বালক, বালতি, বালিশ, নাবালক, Bokaro, chhakka (ছক্কা), pathshala, chorus, globaler — এগুলোতে আর ভুল warning নেই।
 - আসল গালি আগের মতোই ধরে: "তুই বাল", "মাগির পোলা", "চোদাকে ধর", f.u.c.k, b0k4।
 - Note: জুতা/গরু/ক্ষেত-এর মতো double-meaning word list-এ আছে — দরকার না হলে panel থেকে OFF করে দিও।
+
+## AA. Token-based gali precision + threat-negation (2026-10-14)
+- Cross-word জোড়া আর ধরে না: "tumar bolo"→marbo, "kom chilo"→mc, "nacho dam"→chod, "Bob"→boob, "ashole"(আসলে)→asshole, "mishti/dushtu"→sht — সব safe।
+- Common word শুধু standalone(+suffix): dalal/dalaler ধরে, dalali ধরে না; "marbo na" skip।
+- Bypass আগের মতোই ধরে: F.U.C.K, b!tch, b0k4ch0d4, phuck, m.c — test: 63 case green।
+- Trigger keyword "ok"/"buy" এখন "book"/"buyer"-এ fire করে না। Redeploy লাগবে (GitHub push → Render)।
+
+## AB. Dyno-style Automod Rules — light version (2026-10-14)
+- Group panel e **Automod Rules** tab: rule cards (status dot + EDIT + toggle + search) — Bad Words, Links, **All Caps, Emoji Spam, Duplicate Text, Newlines, Character Count**, Flood, Forward, Video, Inbox, Button, Fake-title, Scammer।
+- Notun 5 rule **default OFF** (purono group e hothat delete hobe na) — card ON + limit + Save।
+- **+ Create Rule** modal (Dyno modal er moto): Bad Words / Trigger Keyword / 5 automod type — baniye dilei apply।
+- Custom warn text per-rule (Automod card / Custom Messages tab)। Rules Firestore `tg_groups` doc e save — notun field publish লাগে না।

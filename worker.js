@@ -167,6 +167,40 @@ function linkAllowed(text, whitelist) {
     }
     return false;
 }
+// ---- Dyno-style Automod helpers (default OFF — panel → Automod) ----
+function capsHit(text, minLen, percent) {
+    const letters = String(text || "").replace(/[^A-Za-z]/g, "");
+    if (letters.length < (minLen || 0)) return false;
+    let caps = 0;
+    for (const c of letters) { if (c >= "A" && c <= "Z") caps++; }
+    return (caps * 100 / letters.length) >= (percent || 100);
+}
+function emojiCount(text) {
+    try {
+        const m = String(text || "").match(/\p{Extended_Pictographic}/gu);
+        return m ? m.length : 0;
+    } catch (e) {
+        const m2 = String(text || "").match(/[\u{1F300}-\u{1FAFF}\u2600-\u27BF\u2B00-\u2BFF]/gu);
+        return m2 ? m2.length : 0;
+    }
+}
+function newlineCount(text) {
+    const m = String(text || "").match(/\n/g);
+    return m ? m.length : 0;
+}
+// Duplicate-text spam: ekoi user ekoi lekha bar-by-bar pathale count bare.
+// Short text (<4) + command (/) count hoy na.
+const dupMap = new Map(); // "chatId:userId" -> { text, count }
+function dupHit(chatId, userId, text, need) {
+    const norm = String(text || "").toLowerCase().trim().replace(/\s+/g, " ").slice(0, 200);
+    if (!norm || norm.length < 4 || norm.startsWith("/") || norm.startsWith("!")) return 0;
+    const k = String(chatId) + ":" + String(userId);
+    const prev = dupMap.get(k);
+    const count = (prev && prev.text === norm) ? (prev.count + 1) : 1;
+    dupMap.set(k, { text: norm, count });
+    if (dupMap.size > 4000) dupMap.clear();
+    return count >= Math.max(2, Number(need) || 3) ? count : 0;
+}
 // Spaced/dotted single-letter evasion join ("F.U.C.K"→fuck, "f u c k"→fuck).
 // Shudhu single/short part thakle join হয় — "tumar bolo"/"kom chilo" untouched.
 function joinSpacedSingles(text) {
@@ -1678,6 +1712,11 @@ groupBot.on("my_chat_member", async (msg) => {
                 fakeTitleMsg: "",
                 fakeTitleDeleteSec: 0,
                 fakeTitleDelete: true,
+                capsOn: false, capsMinLen: 15, capsPercent: 70,
+                emojiOn: false, emojiLimit: 5,
+                dupOn: false, dupCount: 3,
+                newlineOn: false, newlineLimit: 5,
+                maxLenOn: false, maxLen: 1000,
                 chatOff: false,
                 lockMsg: "",
                 useDefaultBadWords: true,
@@ -2577,6 +2616,52 @@ async function onGroupUpdate(msg, isEdit) {
                     const linkMsg = (groupConf.msgs && groupConf.msgs.link) || "অননুমোদিত লিংক দেওয়া নিষেধ!";
                     const m = await groupBot.sendMessage(chatId, `⚠️ <b>@${fromUser.username || fromUser.first_name}</b>, ${linkMsg}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
                     if (m) autoDel(chatId, m.message_id, filterDeleteSec(groupConf));
+                    return;
+                }
+            }
+
+            // ৪.৫ Dyno-style Automod rules (default OFF — panel → Automod Rules)
+            // text rules: caps / emoji-spam / newlines / max-length / duplicate
+            if (text) {
+                const amDel = filterDeleteSec(groupConf);
+                const amUser = `@${fromUser.username || fromUser.first_name}`;
+                const amWarn = async (msgText) => {
+                    const wm = await groupBot.sendMessage(chatId, `⚠️ <b>${amUser}</b>, ${msgText}`, { parse_mode: "HTML" }).catch((e) => { hintNoRights(chatId, e); return null; });
+                    if (wm) autoDel(chatId, wm.message_id, amDel);
+                };
+                // ALL CAPS
+                if (cfgBool(groupConf, "capsOn", false) &&
+                    capsHit(text, cfgNum(groupConf, "capsMinLen", 15, 4, 200), cfgNum(groupConf, "capsPercent", 70, 10, 100))) {
+                    await delMsg(chatId, msgId);
+                    await amWarn((groupConf.msgs && groupConf.msgs.caps) || "অতিরিক্ত বড় হাতের অক্ষর (ALL CAPS) ব্যবহার নিষেধ!");
+                    return;
+                }
+                // EMOJI SPAM
+                if (cfgBool(groupConf, "emojiOn", false) &&
+                    emojiCount(text) > cfgNum(groupConf, "emojiLimit", 5, 2, 50)) {
+                    await delMsg(chatId, msgId);
+                    await amWarn((groupConf.msgs && groupConf.msgs.emoji) || "একসাথে এতগুলো emoji পাঠানো নিষেধ!");
+                    return;
+                }
+                // CHAT-CLEARING NEWLINES
+                if (cfgBool(groupConf, "newlineOn", false) &&
+                    newlineCount(text) > cfgNum(groupConf, "newlineLimit", 5, 2, 30)) {
+                    await delMsg(chatId, msgId);
+                    await amWarn((groupConf.msgs && groupConf.msgs.newline) || "এতগুলো নতুন লাইন দিয়ে chat clear করা নিষেধ!");
+                    return;
+                }
+                // CHARACTER COUNT (max length)
+                if (cfgBool(groupConf, "maxLenOn", false) &&
+                    text.length > cfgNum(groupConf, "maxLen", 1000, 200, 4000)) {
+                    await delMsg(chatId, msgId);
+                    await amWarn((groupConf.msgs && groupConf.msgs.maxlen) || "এত বড় message পাঠানো নিষেধ!");
+                    return;
+                }
+                // DUPLICATE TEXT
+                if (cfgBool(groupConf, "dupOn", false) &&
+                    dupHit(chatId, userId, text, cfgNum(groupConf, "dupCount", 3, 2, 10))) {
+                    await delMsg(chatId, msgId);
+                    await amWarn((groupConf.msgs && groupConf.msgs.dup) || "একই message বারবার পাঠানো (duplicate spam) নিষেধ!");
                     return;
                 }
             }
