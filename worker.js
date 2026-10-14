@@ -118,7 +118,7 @@ function wordBoundary(textLower, word) {
 // Choto Bangla word (বাল/চোদা/চুদি/মাগী — ৪ অক্ষর পর্যন্ত): শুধু আলাদা থাকলে মিলবে,
 // genitive suffix (র/কে/টা/টি/গুলো/দের) সহ চলবে — কিন্তু ইকবাল/বালক/বালতি/বালিশ-এ ধরবে না
 const BN_SEP = "[\\s।,!?;:\"'()\\[\\]{}<>\\-–—/\\\\|@#$%^*+=~`]";
-const BN_SUF = "(?:র(?:া)?|কে|টা|টি|গুলো(?:র|কে)?|দের)";
+const BN_SUF = "(?:র(?:া)?|ের|য়ের|কে|টা|টি|গুলো(?:র|কে)?|দের)";
 function bnWordHit(textLower, word) {
     const w = (word || "").toLowerCase().trim();
     if (!w) return false;
@@ -131,6 +131,32 @@ function isInboxText(text) {
     if (wordHit(t, "ib")) return true;
     for (const w of INBOX_WORDS) { if (wordHit(t, w)) return true; }
     return false;
+}
+// Spaced/dotted single-letter evasion join ("F.U.C.K"→fuck, "f u c k"→fuck).
+// Shudhu single/short part thakle join হয় — "tumar bolo"/"kom chilo" untouched.
+function joinSpacedSingles(text) {
+    const parts = String(text || "").split(/(\s+)/);
+    for (let i = 0; i < parts.length; i++) {
+        const ch = parts[i];
+        if (!ch || /^\s+$/.test(ch)) continue;
+        const sub = ch.split(/[\W_]+/).filter(Boolean);
+        if (sub.length > 1 && sub.every((p) => p.length <= 3)) {
+            parts[i] = sub.join("");
+        }
+    }
+    return parts.join("").replace(/\b([a-z0-9])((?:\s+[a-z0-9])+)\b/gi, (m) => m.replace(/\s+/g, ""));
+}
+// Trigger match: choto keyword (<=3, command নয়) → standalone word;
+// baki → substring (ager moto). ("ok" keyword "book" e fire korto — glitch fix)
+function trigHit(hayLower, kwLower) {
+    if (!kwLower) return false;
+    if (kwLower.length <= 3 && !kwLower.startsWith("/") && !kwLower.startsWith("!")) {
+        if (/[^a-z0-9]/.test(kwLower)) {
+            return String(hayLower).split(/[^a-z0-9\u0980-\u09FF]+/).includes(kwLower);
+        }
+        try { return new RegExp("\\b" + escRe(kwLower) + "\\b", "i").test(hayLower); } catch (e) { return false; }
+    }
+    return hayLower.includes(kwLower);
 }
 
 // FULL gali list (Bangla + English + Banglish) — built-in default.
@@ -237,19 +263,98 @@ function getNormBad() {
     if (!normBadCache) normBadCache = REAL_BAD_WORDS.map((w) => ({ raw: String(w), norm: normAbuse(w) }));
     return normBadCache;
 }
+// Separator-tolerant boundary ("m.c", "b c" ধরে — কিন্তু "kom chilo"/"cucumber"-এ ধরবে না)
+function wordBoundarySep(textLower, word) {
+    const w = (word || "").toLowerCase().trim();
+    if (!w) return false;
+    try {
+        const pat = w.split("").map((c) => escRe(c)).join("[\\W_]*");
+        return new RegExp("\\b" + pat + "\\b", "i").test(textLower);
+    } catch (e) { return wordBoundary(textLower, word); }
+}
+// ---- Precision abuse matching (false-positive fix) ----
+// Age symbol/space মুছে পুরো message এক string করে indexOf চলত — পাশাপাশি দুই
+// নির্দোষ word জোড়া লেগে gali stem বানাত ("tumar bolo"→marbo, "Bob"→bob,
+// "ashole"[আসলে]→asshole, "mishti"→sht) আর delete+warn হয়ে যেত।
+// Ekhon message token (word) ভাগ করে প্রতি token-এ মেলানো হয়।
+function abuseTokens(text) {
+    const raws = String(text || "").toLowerCase().split(/[^a-z0-9\u0980-\u09FF]+/).filter(Boolean);
+    const out = [];
+    for (const r of raws) {
+        const n = normAbuse(r);
+        if (n) out.push({ raw: r, norm: n, idx: -1 });
+    }
+    return out;
+}
+// Common/double-meaning stem — শুধু standalone token (+suffix) হিসেবে ধরবে।
+// (normAbuse form-এ compare হয়; "dalali"/"kom chilo" safe, "dalal"/"dalaler" ধরা পড়ে)
+const AMBIGUOUS_RAW = [
+    "dalal", "batpar", "dhandabaz", "fotka", "fotkabaz", "chotolok", "fokini", "fokinnni",
+    "chiter", "chitingbaz", "dhokabaz", "bhondo", "chamcha", "telbaj", "nimokharam",
+    "bejonma", "jaroj", "munafik", "luichcha", "luchcha", "bodmaish", "bodmash", "beyadob",
+    "shoytan", "shaitan", "shoitan", "soytaner", "iblis", "lanot", "behaya", "beshorom",
+    "gadha", "murkho", "ahammok", "ulluk", "chasha", "khet", "habla",
+    "chagol", "ramchagol", "goru", "kukur", "shiyal", "bador",
+    "juta", "jhata", "lathkhor", "potita", "hijra", "hizra", "malaun", "katua",
+    "barovatari", "barobhatari", "bessha", "beshya",
+    "shudkhor", "ghushkhor", "modkhor", "ganjakhor", "neshakhor", "babakhor",
+    "dakat", "dakait", "khuni", "gunda", "mastan",
+    "chorer", "marbo", "merefelbo", "khunkorbo",
+    "abaler", "balerbal", "malai", "dimaon", "magir", "randir",
+    "দালাল", "বাটপার", "ফটকা", "ফটকাবাজ", "ধান্দাবাজ", "ধোঁকাবাজ", "ভণ্ড",
+    "ছোটলোক", "ফকিন্নি", "চিটার", "চিটিংবাজ", "চামচা", "তেলবাজ",
+    "বেয়াদব", "লুইচ্চা", "বদমাশ", "ছাগল", "রামছাগল", "গরু", "শিয়াল", "বাদর",
+    "ডাকাত", "খুনি", "গুন্ডা", "মাস্তান", "জুতা", "ঝাঁটা", "পতিতা", "হিজড়া",
+    "বেশ্যা", "মালাউন", "শয়তান", "ইবলিস", "মারবো", "মেরেফেলবো", "খুনকরব",
+    "সুদখোর", "ঘুষখোর", "মদখোর", "গাঁজাখোর", "নেশাখোর", "বাবাখোর"
+];
+let AMB_NORMS = null;
+function ambNorms() {
+    if (!AMB_NORMS) AMB_NORMS = new Set(AMBIGUOUS_RAW.map((w) => normAbuse(String(w))).filter(Boolean));
+    return AMB_NORMS;
+}
+// Raw-form hint লাগে এমন stem (norm এক হলেও raw আলাদা: Bob≠boob, ashole≠asshole)
+const RAW_HINTS = {
+    bob: { hints: ["boob"], exactOk: false },
+    bobs: { hints: ["boobs"], exactOk: false },
+    sht: { hints: ["shit"], exactOk: true },
+    ashole: { hints: ["ass"], exactOk: false }
+};
+function rawSepHas(leetHay, hints) {
+    for (const h of (hints || [])) {
+        try {
+            const pat = String(h).split("").map((c) => escRe(c)).join("[\\W_]*");
+            if (new RegExp(pat, "i").test(leetHay)) return true;
+        } catch (e) {}
+    }
+    return false;
+}
+function ambSuffixOk(tail, isBn) {
+    if (!tail) return true;
+    if (isBn) return /^(?:র(?:া)?|ের|য়ের|কে|টা|টি|গুলো(?:র|কে)?|দের)$/.test(tail);
+    // NOTE: bare e/te বাদ — "khete"(খেতে=to eat) এর মতো verb-এ লাগত
+    return /^(?:r|ra|er|der|derke|ke|ta|ti|gulo|gulor|guloke|gula|gular)$/.test(tail);
+}
+// Threat word + পাশে না/নাই থাকলে skip ("marbo na" = মারবে না বলেছে, threat না)
+const THREAT_NORMS = new Set(["marbo", "merefelbo", "khunkorbo"]);
+const NEG_TOKS = new Set(["na", "nai", "nah", "ni", "naa", "ne", "ney"]);
 // Full message theke KON word ta match korlo — admin DM/log e mention হয়
 function findBadWord(text, conf) {
-    const t = (text || "").toLowerCase();
+    const t = joinSpacedSingles((text || "").toLowerCase());
     if (!t) return "";
     let skip = null;
     try {
         const dl = conf && conf.disabledBadWords;
         if (Array.isArray(dl) && dl.length) skip = new Set(dl.map((x) => normAbuse(String(x || "").trim())).filter(Boolean));
     } catch (e) {}
+    const isDisabled = (norm) => !!(skip && skip.has(norm));
+    // 1) Boundary words — standalone (+leet + separator-tolerant: "m.c", "b c")
     for (const b of BOUNDARY_BAD_WORDS) {
-        if (skip && skip.has(normAbuse(b))) continue;
-        if (wordBoundary(t, b) || wordBoundary(leetMap(t), b)) return b;
+        if (isDisabled(normAbuse(b))) continue;
+        const lt = leetMap(t);
+        if (wordBoundary(t, b) || wordBoundary(lt, b) || wordBoundarySep(t, b) || wordBoundarySep(lt, b)) return b;
     }
+    const toks = abuseTokens(t);
     const nText = normAbuse(t);
     if (!nText) return "";
     // Disabled word যে span cover করে, সেখানে কোনো match নয় (overlap হলেই বাদ)
@@ -261,28 +366,79 @@ function findBadWord(text, conf) {
         while ((i = nText.indexOf(s, i + 1)) !== -1) spans.push([i, i + s.length]);
     });
     const covered = (idx, len) => spans.some(([a, b]) => idx < b && idx + len > a);
+    // token → whole-string position (strip monotonic বলে order-এ মেলে)
+    let pos = 0;
+    for (const tk of toks) {
+        const at = nText.indexOf(tk.norm, pos);
+        tk.idx = at;
+        if (at !== -1) pos = at + tk.norm.length;
+    }
+    const tokCovered = (tk) => tk.idx !== undefined && tk.idx !== -1 && covered(tk.idx, tk.norm.length);
     const isBnShort = (w) => /[\u0980-\u09FF]/.test(w) && String(w).length <= 4;
-    const findIn = (list) => {
-        for (const bad of (list || [])) {
-            const b = String(bad || "").trim();
-            if (!b || b.length < 2) continue;
-            // Choto Bangla word — ইকবাল/বালক/বালতি/বালিশ protection
-            if (isBnShort(b)) { if (bnWordHit(t, b)) return b; continue; }
-            const nb = normAbuse(b);
+    const matchOne = (word) => {
+        const b = String(word || "").trim();
+        if (!b || b.length < 2) return "";
+        const nb = normAbuse(b);
+        if (!nb || isDisabled(nb)) return "";
+        const isBn = /[\u0980-\u09FF]/.test(b);
+        // Choto Bangla word — ইকবাল/বালক/বালতি/বালিশ protection
+        if (isBnShort(b)) { if (bnWordHit(t, b)) return b; return ""; }
+        // Ambiguous/common stem — শুধু standalone token (+suffix)
+        if (ambNorms().has(nb)) {
+            for (let i = 0; i < toks.length; i++) {
+                const tk = toks[i];
+                if (tokCovered(tk)) continue;
+                let hit = false;
+                if (tk.norm === nb) hit = true;
+                else if (tk.norm.length > nb.length && tk.norm.startsWith(nb) && ambSuffixOk(tk.norm.slice(nb.length), isBn)) hit = true;
+                if (!hit) continue;
+                if (THREAT_NORMS.has(nb)) {
+                    const pv = toks[i - 1] ? toks[i - 1].norm : "";
+                    const nx = toks[i + 1] ? toks[i + 1].norm : "";
+                    if (NEG_TOKS.has(pv) || NEG_TOKS.has(nx)) continue;
+                }
+                return b;
+            }
+            return "";
+        }
+        // Raw-hint stem (Bob/boob, ashole/asshole, mishti/shit)
+        const rh = RAW_HINTS[nb];
+        if (rh) {
+            for (const tk of toks) {
+                if (tokCovered(tk)) continue;
+                if (tk.norm === nb) {
+                    if (rh.exactOk || rawSepHas(leetMap(tk.raw), rh.hints)) return b;
+                    continue;
+                }
+                if (tk.norm.includes(nb) && rawSepHas(leetMap(tk.raw), rh.hints)) return b;
+            }
+            if (nb.length >= 6) {
+                const ii = nText.indexOf(nb);
+                if (ii !== -1 && !covered(ii, nb.length) && rawSepHas(leetMap(t), rh.hints)) return b;
+            }
+            return "";
+        }
+        // Choto stem (<=3) — শুধু exact token ("psycho" safe, "Bob" safe)
+        if (nb.length <= 3) {
+            for (const tk of toks) { if (!tokCovered(tk) && tk.norm === nb) return b; }
+            return "";
+        }
+        // Strong stem — token-includes (inflection/compound ধরে, cross-word জোড়া ধরে না)
+        for (const tk of toks) { if (!tokCovered(tk) && tk.norm.includes(nb)) return b; }
+        // dotted/space-split bypass ("f.u.c.k") — শুধু strong stem, disabled-overlap বাদে
+        if (nb.length >= 6) {
             const ii = nText.indexOf(nb);
             if (ii !== -1 && !covered(ii, nb.length)) return b;
         }
         return "";
     };
-    const cm = findIn(conf && conf.customBadWords);
-    if (cm) return cm;
+    const customs = (conf && conf.customBadWords) || [];
+    for (const c of customs) { const r = matchOne(c); if (r) return r; }
     if (!conf || conf.useDefaultBadWords !== false) {
         for (const e of getNormBad()) {
             if (!e.norm) continue;
-            if (skip && skip.has(e.norm)) continue;
-            if (isBnShort(e.raw)) { if (bnWordHit(t, e.raw)) return e.raw; continue; }
-            const ii = nText.indexOf(e.norm);
-            if (ii !== -1 && !covered(ii, e.norm.length)) return e.raw;
+            const r = matchOne(e.raw);
+            if (r) return r;
         }
     }
     return "";
@@ -1656,7 +1812,7 @@ groupBot.on("message", async (msg) => {
             const trigCoolSec = cfgNum(groupConf, "trigCooldownSec", 15, 0, 300);
             for (const trig of groupConf.triggers) {
                 const kw = (trig.keyword || "").toLowerCase().trim();
-                if (kw && (cleanUserText.includes(kw) || cleanUserText === kw)) {
+                if (kw && trigHit(cleanUserText, kw)) {
                     const ck = chatId + ":" + userId + ":" + kw;
                     if (trigCoolSec > 0 && Date.now() - (trigCool.get(ck) || 0) < trigCoolSec * 1000) continue;
                     trigCool.set(ck, Date.now());
