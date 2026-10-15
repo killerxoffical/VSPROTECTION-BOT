@@ -88,6 +88,12 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // join/leave/live events: bot likhbe, owner panel theke dekhbe
+    match /tg_events/{logId} {
+      allow read: if superAdmin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
     // default deny everything else
     match /{document=**} {
       allow read, write: if false;

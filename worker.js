@@ -1679,6 +1679,29 @@ async function dmAdmins(chatId, conf, html) {
         }
     } catch (e) {}
 }
+// Join/Leave/Live event → admin panel (tg_events) e save — panel Trackers tab e dekha jabe
+async function logEvent(chatId, type, extra) {
+    try {
+        extra = extra || {};
+        let owner = String(extra.ownerUid || "");
+        if (!owner) {
+            try {
+                const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+                if (gd.exists) owner = String((gd.data() || {}).ownerUid || "");
+            } catch (e) {}
+        }
+        await db.collection("tg_events").add({
+            chatId: String(chatId),
+            type: String(type || "info").slice(0, 30),
+            userId: String(extra.userId || ""),
+            name: String(extra.name || "").slice(0, 80),
+            username: String(extra.username || "").slice(0, 40),
+            text: String(extra.text || "").slice(0, 300),
+            ownerUid: owner,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (e) {}
+}
 function cleanName(s) { return String(s || "").replace(/[<>&]/g, "").slice(0, 60) || "Member"; }
 
 // গ্রুপে বট অ্যাড হলেই স্বয়ংক্রিয় রেজিস্টার (default protection ON)
@@ -1871,17 +1894,35 @@ async function onGroupUpdate(msg, isEdit) {
             return;
         }
 
-        // 🔴 LIVE event (voice-chat/live-stream শুরু): group e কিছু post হবে না,
-        // শুধু admin দের DM যাবে (liveNotifyOn + notifyAdmins)।
-        if (isGroup && (msg.video_chat_started || msg.video_chat_scheduled)) {
+        // 🔴 LIVE event (voice-chat/live-stream): group e post hobe na,
+        // admin DM + admin panel (tg_events) — duijaygatei jabe (liveNotifyOn + notifyAdmins)।
+        if (isGroup && (msg.video_chat_started || msg.video_chat_ended || msg.video_chat_scheduled || msg.video_chat_participants_invited)) {
             try {
+                let evType = "live_start", evEmoji = "🔴", evTitle = "LIVE cholche!";
+                if (msg.video_chat_ended) { evType = "live_end"; evEmoji = "⚫"; evTitle = "LIVE sesh!"; }
+                else if (msg.video_chat_scheduled) { evType = "live_scheduled"; evEmoji = "📅"; evTitle = "LIVE scheduled!"; }
+                else if (msg.video_chat_participants_invited) { evType = "live_invite"; evEmoji = "📨"; evTitle = "LIVE invite!"; }
+                const starterId = (fromUser && !fromUser.is_bot) ? String(fromUser.id) : "";
+                const starterName = (fromUser && !fromUser.is_bot)
+                    ? cleanName(`${fromUser.first_name || ""} ${fromUser.last_name || ""}`.trim())
+                    : "Someone";
+                const starterUn = (fromUser && fromUser.username) ? ("@" + fromUser.username) : "None";
+                const groupTitle = cleanName(msg.chat.title);
+                // gali alert er moto sundor format — clickable name + username + IDs
+                const userLine = starterId
+                    ? `👤 <a href="tg://user?id=${starterId}">${starterName}</a> ${starterUn} (<code>${starterId}</code>)`
+                    : `👤 ${starterName}`;
+                // 1) admin panel log (Trackers tab e dekha jabe)
+                try {
+                    await logEvent(chatId, evType, {
+                        userId: starterId, name: starterName, username: starterUn,
+                        text: evTitle, ownerUid: (groupConf && groupConf.ownerUid) || ""
+                    });
+                } catch (e) {}
+                // 2) bot DM → gali alert er moto (username soho sundor kore)
                 if (cfgBool(groupConf, "liveNotifyOn", true)) {
-                    const starter = (fromUser && !fromUser.is_bot)
-                        ? cleanName(`${fromUser.first_name || ""} ${fromUser.last_name || ""}`.trim()) +
-                          (fromUser.username ? ` (@${fromUser.username})` : ` (<code>${fromUser.id}</code>)`)
-                        : "Someone";
                     await dmAdmins(chatId, groupConf,
-                        `🔴 <b>LIVE cholche!</b>\n\n👤 ${starter}\n📍 <b>${cleanName(msg.chat.title)}</b> (<code>${chatId}</code>)\n\nGroup call button e chap diye join koro.`);
+                        `${evEmoji} <b>LIVE Alert</b>\n\n${userLine}\n📍 <b>${groupTitle}</b> (<code>${chatId}</code>)\n🎥 <b>Status:</b> ${evTitle}\n\nGroup call button e chap diye join koro.`);
                 }
             } catch (e) {}
             return;
@@ -2014,13 +2055,27 @@ async function onGroupUpdate(msg, isEdit) {
         // Edit-এ count বাড়ে না (notun message na)
         if (!isEdit) trackMember(chatId, fromUser.id.toString(), currentName, currentUsername, groupConf.ownerUid || "").catch(() => {});
 
-        // Leave log (customize: leaveLogOn)
+        // Leave log (customize: leaveLogOn) → group msg + admin DM (bot) + admin panel (tg_events)
         if (msg.left_chat_member) {
             try {
                 const lv = msg.left_chat_member;
-                if (!lv.is_bot && cfgBool(groupConf, "leaveLogOn", true)) {
-                    const lvName = `${lv.first_name || ""} ${lv.last_name || ""}`.trim() || "A member";
-                    await groupBot.sendMessage(chatId, `👋 <b>${lvName}</b> left the group.`, { parse_mode: "HTML" }).catch(() => {});
+                if (lv && !lv.is_bot) {
+                    const lvName = cleanName(`${lv.first_name || ""} ${lv.last_name || ""}`.trim() || "A member");
+                    const lvUn = lv.username ? ("@" + lv.username) : "None";
+                    const lvId = String(lv.id || "");
+                    if (cfgBool(groupConf, "leaveLogOn", true)) {
+                        await groupBot.sendMessage(chatId, `👋 <b>${lvName}</b> left the group.`, { parse_mode: "HTML" }).catch(() => {});
+                        // admin DM — bot ei pathabe
+                        await dmAdmins(chatId, groupConf,
+                            `👋 <b>Member left</b>\n\n👤 <a href="tg://user?id=${lvId}">${lvName}</a> ${lvUn} (<code>${lvId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b> (<code>${chatId}</code>)`);
+                    }
+                    // admin panel log (ON/OFF nirbisheshe — panel e history thakbe)
+                    try {
+                        await logEvent(chatId, "leave", {
+                            userId: lvId, name: lvName, username: lvUn,
+                            text: "left the group", ownerUid: (groupConf && groupConf.ownerUid) || ""
+                        });
+                    } catch (e) {}
                 }
             } catch (e) {}
             return;
