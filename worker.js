@@ -923,6 +923,57 @@ app.post("/api/tg/cmd-text", async (req, res) => {
         return res.status(500).json({ ok: false, error: e.message });
     }
 });
+// ── COMMAND TEST (preview) — action chole NA, shudhu reply dekha jay ──
+app.post("/api/tg/test-cmd", async (req, res) => {
+    const { chatId, cmd, keyword, kind } = req.body;
+    if (!chatId || !cmd) return res.status(400).json({ ok: false, error: "Group + command দিন" });
+    const sender = await resolveChatBot(String(chatId), req.body.botId);
+    try {
+        const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+        const conf = gd.exists ? (gd.data() || {}) : {};
+        let text = "";
+        let act = "";
+        let head = "";
+
+        if (kind === "custom") {
+            const kw = String(keyword || cmd || "").toLowerCase().trim();
+            const t = (conf.triggers || []).find((x) => (x.keyword || "").toLowerCase().trim() === kw);
+            if (!t) {
+                return res.status(404).json({
+                    ok: false,
+                    error: "Ei phrase group e nai — save hoyeche kina check koro (Save button press kora hoyeche?)"
+                });
+            }
+            text = String(t.reply || "");
+            act = String(t.action || "reply");
+            head = `🧪 <b>TEST</b> — phrase: <code>${escH(t.keyword || kw)}</code>` +
+                (act && act !== "reply" ? ` · action: <b>${escH(act)}</b> <i>(test e action chole NA)</i>` : "");
+        } else {
+            const c = cmdKeyOf(cmd);
+            const reg = CMD_REGISTRY.find((x) => x.cmd === c || (x.alias || []).includes(String(cmd).toLowerCase()));
+            text = cmdCustomText(conf, c) || (reg ? String(reg.reply || "") : "");
+            if (!text) {
+                return res.status(404).json({ ok: false, error: "Ei command er reply template pawa jay ni" });
+            }
+            head = `🧪 <b>TEST</b> — command: <code>${escH(cmd)}</code>`;
+        }
+
+        const sample = {
+            mention: '<a href="tg://user?id=123456789">Test User</a>',
+            name: "Test User", id: "123456789",
+            count: 2, limit: 5, reason: "spam korchilo", duration: "১ ঘণ্টা",
+            text: "test message", groupId: String(chatId), userId: "999888777", code: "TEST123"
+        };
+        const filled = fillCmdText(text, sample);
+        await sender.sendMessage(String(chatId),
+            head + "\n━━━━━━━━━━━━\n" + (filled || "<i>(khali reply)</i>"),
+            { parse_mode: "HTML", disable_web_page_preview: true });
+        return res.json({ ok: true, message: "Test pathano hoye gelo group e! 🧪" });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
 
 
 app.post("/api/tg/test-trigger", async (req, res) => {
@@ -3838,6 +3889,21 @@ db.collection("tg_groups").onSnapshot((snap) => {
 }, (err) => console.error("[SNAPSHOT]", err.message));
 
 // Debug: group registered kina check (browser e khulle dekha jay)
+// Deploy version check — panel e live version dekha jay
+app.get("/api/tg/version", (req, res) => {
+    res.json({
+        ok: true,
+        version: "2026-10-22-customcmd",
+        features: {
+            customCommandAction: true,
+            cmdTest: true,
+            placeholders: true,
+            profile: true,
+            adminAutoDetect: true
+        }
+    });
+});
+
 app.get("/api/tg/groups-count", async (req, res) => {
     try {
         const snap = await db.collection("tg_groups").limit(1).get();

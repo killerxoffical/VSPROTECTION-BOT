@@ -328,3 +328,17 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Fix:** `const isAdmin = await isGroupAdmin(...)` — trigger block er **age** (line 2732) compute kora hoy. Ekhon action trigger o chole.
 - **Extra:** runtime test likha hoye **asol `onGroupUpdate` function ta chaliye** verify kora hoy (13/13 pass) — custom command + action, plain reply trigger, non-admin notice, target hint, placeholder fill, ar lamba sentence e phrase match — shob tested.
 - **Korte hobe:** GitHub push -> Render redeploy.
+
+## AJ. 🧪 Test button (protita command e) + server version chip (2026-10-22)
+- **Protita command card e ekhon `🧪 Test` button** — built-in command ar custom command, duijon e.
+    • Click korle **group e ekta test message** pathay (reply text + `{mention}`/`{count}` etc. **sample value** diye bosha hoy)
+    • Custom command e test korle dekhay: `🧪 TEST — phrase: <code>warn dewa uchit</code> · action: <b>warn</b> (test e action chole NA)`
+    • **Test e kono action chole na** — shudhu dekhay ki hoto. (Real warn/ban korte hole group e phrase likhte hobe)
+    • Built-in command e apnar **Custom reply** (cmdTexts) override ta-i dekhay — tai exactly jeta dibe seta test message e ase
+- **❌ Test fail hole clear message** ase: `Ei phrase group e nai — save hoyeche kina check koro` (mane phrase Firestore e nai — Save button dhora hoyeche kina dekho).
+- **Server version chip** (Commands section er shuru te): live server er version dekhay.
+    • `server 2026-10-22-customcmd ✓` = notun code live
+    • `purono server — redeploy koro!` = **worker.js deploy hoy nai** — GitHub push → Render redeploy koro
+    • `server off / URL thik na` = Server URL thik nai (Dashboard → Server Webhook)
+- **API:** `POST /api/tg/test-cmd` (chatId + cmd + kind + keyword) · `GET /api/tg/version` (live feature check)
+- **Korte hobe:** GitHub push → Render redeploy → panel **Ctrl+F5** → Commands section e version chip `✓` dekho, tarpor Test button chalao.
