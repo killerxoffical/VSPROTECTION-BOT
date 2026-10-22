@@ -849,13 +849,14 @@ app.post("/api/tg/test-dm", async (req, res) => {
 
 // Trigger test: keyword reply + buttons গ্রুপে পাঠিয়ে চেক করা
 app.post("/api/tg/test-trigger", async (req, res) => {
-    const { chatId, keyword, botId } = req.body;
+    const { chatId, keyword, botId, kind } = req.body;
     if (!chatId || !keyword) return res.status(400).json({ ok: false, error: "Group + keyword দিন" });
     const sender = await resolveChatBot(String(chatId), botId);
     try {
         const gDoc = await db.collection("tg_groups").doc(chatId.toString()).get();
         const conf = gDoc.exists ? gDoc.data() : {};
-        const trig = (conf.triggers || []).find((t) => (t.keyword || "").toLowerCase().trim() === keyword.toString().toLowerCase().trim());
+        const list = (kind === "admin" ? conf.adminTriggers : conf.triggers) || [];
+        const trig = list.find((t) => (t.keyword || "").toLowerCase().trim() === keyword.toString().toLowerCase().trim());
         if (!trig) return res.status(404).json({ ok: false, error: "Keyword পাওয়া যায়নি" });
         const built = buildTriggerMarkup(trig);
         const opts = { parse_mode: "HTML", disable_web_page_preview: true };
@@ -863,6 +864,7 @@ app.post("/api/tg/test-trigger", async (req, res) => {
         try {
             await sender.sendMessage(chatId.toString(), trig.reply || "Test", opts);
         } catch (e) {
+            console.error("[TEST-TRIGGER ERR] chat=" + chatId + " keyword=\"" + trig.keyword + "\":", (e && e.message) || e, "| hint:", tlErrHint(e));
             const retry = { disable_web_page_preview: true };
             if (built.markup) retry.reply_markup = built.markup;
             await sender.sendMessage(chatId.toString(), trig.reply || "Test", retry);
@@ -1456,7 +1458,7 @@ async function wizCallback(bot, q) {
         if (!c) return;
         wizMap.set(q.from.id.toString(), { step: "kw", groupId: String(gid), action: "trig", data: {}, at: Date.now() });
         await ack();
-        await bot.sendMessage(q.message.chat.id, `⚡ <b>নতুন auto-reply</b>\n\n1️⃣ Keyword পাঠাও (user যা লিখবে):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+        await bot.sendMessage(q.message.chat.id, `⚡ <b>nতুন auto-reply</b>\n\n1️⃣ Keyword pathao (user ba admin jeta likhbe):\n(batil: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
         return;
     }
     if (kind === "wp_tl") {
@@ -1464,7 +1466,7 @@ async function wizCallback(bot, q) {
         if (!c) return;
         const arr = c.g.triggers || [];
         await wizEdit(bot, q, `🗑 <b>Triggers</b> (${arr.length}) — ❌ = delete:`, [
-            ...arr.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}`, callback_data: `wp_del:${gid}:${i}` }])),
+                    ...arr.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}${(t.buttons && t.buttons.length) ? " 🔘" + t.buttons.length : ""}`, callback_data: `wp_del:${gid}:${i}` }])),
             [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
         ]);
         return;
@@ -1493,7 +1495,7 @@ async function wizCallback(bot, q) {
         if (!c) return;
         wizMap.set(q.from.id.toString(), { step: "kw", groupId: String(gid), action: "atrig", data: {}, at: Date.now() });
         await ack();
-        await bot.sendMessage(q.message.chat.id, `👑 <b>নতুন admin-reply</b> (শুধু admin লিখলে reply যাবে)\n\n1️⃣ Keyword পাঠাও (admin যা লিখবে, যেমন <code>!price</code>):\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+        await bot.sendMessage(q.message.chat.id, `👑 <b>nতুন admin-reply</b> (shudhu admin likhle reply jabe)\n\n1️⃣ Keyword pathao (admin jeta likhbe, jemon <code>!price</code>):\n(batil: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
         return;
     }
     if (kind === "wp_atl") {
@@ -1501,7 +1503,7 @@ async function wizCallback(bot, q) {
         if (!c) return;
         const arr = c.g.adminTriggers || [];
         await wizEdit(bot, q, `👑 <b>Admin-replies</b> (${arr.length}) — ❌ = delete:`, [
-            ...arr.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}`, callback_data: `wp_adel:${gid}:${i}` }])),
+            ...arr.slice(0, 15).map((t, i) => ([{ text: `❌ ${(t.keyword || "?").slice(0, 30)}${(t.buttons && t.buttons.length) ? " 🔘" + t.buttons.length : ""}`, callback_data: `wp_adel:${gid}:${i}` }])),
             [{ text: "🔙 Menu", callback_data: `wp_g:${gid}` }]
         ]);
         return;
@@ -1597,9 +1599,40 @@ async function wizTextStep(bot, fromUser, w, text) {
                 await bot.sendMessage(uid, `❌ খালি reply! (বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
                 return;
             }
-            w.data.reply = clean.slice(0, 1000); w.step = "del"; w.at = Date.now();
+            w.data.reply = clean.slice(0, 1000); w.data.buttons = []; w.step = "btn"; w.at = Date.now();
             wizMap.set(uid, w);
-            await bot.sendMessage(uid, `3️⃣ Reply কত sec পর delete হবে? সংখ্যা পাঠাও — <b>0 = thakbe</b>:\n(বাতিল: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+            await bot.sendMessage(uid, `3️⃣ Button dite chao? (optional)\n\nFormat: <code>Button Text | https://link</code>\nMaximum 5 button. Na chaile <b>0</b> likhe next e jao.\n(batil: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+            return;
+        }
+        if (w.step === "btn") {
+            const rawBtn = clean;
+            if (/^(0|skip|none|na|nope|done|finish|ok)$/i.test(rawBtn)) {
+                w.step = "del"; w.at = Date.now();
+                wizMap.set(uid, w);
+                await bot.sendMessage(uid, `4️⃣ Reply koto sec por delete hobe? Songkhya pathao — <b>0 = thakbe</b>:\n(batil: /cancel)`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            const bParts = rawBtn.split("|");
+            if (bParts.length < 2) {
+                await bot.sendMessage(uid, `❌ Format vul — <code>Button Text | https://link</code> eivabe pathao (ba <b>0</b> likhe skip).`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            const bLabel = (bParts[0] || "").trim().slice(0, 60);
+            const bRawUrl = (bParts.slice(1).join("|") || "").trim();
+            const bUrl = cleanTriggerUrl(bRawUrl);
+            if (!bLabel || !bUrl) {
+                await bot.sendMessage(uid, `❌ Button text ar link thik koro — <code>Label | https://link</code>`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            w.data.buttons = Array.isArray(w.data.buttons) ? w.data.buttons : [];
+            if (w.data.buttons.length >= 5) {
+                await bot.sendMessage(uid, `❌ Maximum 5 button! <b>0</b> likhe finish koro.`, { parse_mode: "HTML" }).catch(() => {});
+                return;
+            }
+            w.data.buttons.push({ text: bLabel, url: bUrl });
+            w.at = Date.now();
+            wizMap.set(uid, w);
+            await bot.sendMessage(uid, `✅ Button add hoyeche (<b>${w.data.buttons.length}/5</b>).\nAro button dite chao? Pathao — na chaile <b>0</b> likho.`, { parse_mode: "HTML" }).catch(() => {});
             return;
         }
         if (w.step === "del") {
@@ -1615,11 +1648,14 @@ async function wizTextStep(bot, fromUser, w, text) {
                 return;
             }
             const arr = ((gd.data() || {})[arrKey] || []).slice();
-            arr.push({ keyword: w.data.kw, reply: w.data.reply, deleteSec: n });
+            const trigItem = { keyword: w.data.kw, reply: w.data.reply, deleteSec: n };
+            if (Array.isArray(w.data.buttons) && w.data.buttons.length > 0) trigItem.buttons = w.data.buttons;
+            arr.push(trigItem);
             try { await db.collection("tg_groups").doc(String(w.groupId)).update({ [arrKey]: arr }); } catch (e) {}
             groupConfigs.delete(String(w.groupId));
             wizMap.delete(uid);
-            await bot.sendMessage(uid, `✅ <b>${isA ? "Admin-reply" : "Trigger"} saved!</b>\n🔑 <code>${w.data.kw}</code> → reply + ${n}s delete${isA ? " (শুধু admin লিখলে)" : ""}\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
+            const btnInfo = (w.data.buttons && w.data.buttons.length) ? ` + ${w.data.buttons.length} button` : "";
+            await bot.sendMessage(uid, `✅ <b>${isA ? "Admin-reply" : "Trigger"} saved!</b>\n🔑 <code>${w.data.kw}</code> → reply + ${n}s delete${btnInfo}${isA ? " (shudhu admin likhle)" : ""}\n\n<code>/panel</code> — menu`, { parse_mode: "HTML" }).catch(() => {});
             return;
         }
     }
@@ -1930,49 +1966,6 @@ async function getLinkedChatId(chatId) {
     } catch (e) { return ""; }
 }
 
-// Trigger multi-button builder (shared: live reply + test API)
-function cleanTriggerUrl(raw) {
-    if (!raw) return "";
-    let u = raw.toString().trim();
-    if (!u) return "";
-    if (u.startsWith("@")) u = "https://t.me/" + u.slice(1);
-    u = u.replace(/t\.me\/@/g, "t.me/");
-    if (!/^https?:\/\//i.test(u)) {
-        // single word (no dot/slash) = Telegram username -> t.me link
-        if (!u.includes(".") && !u.includes("/") && !u.includes(":") && !u.includes(" ")) {
-            u = "https://t.me/" + u.replace(/^@/, "");
-        } else {
-            u = "https://" + u;
-        }
-    }
-    try {
-        const parsed = new URL(u);
-        if ((parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname.includes(".")) return parsed.href;
-    } catch (e) {}
-    return "";
-}
-function buildTriggerMarkup(trig) {
-    const buttons = [];
-    const skipped = [];
-    const pushBtn = (txt, rawUrl) => {
-        const validUrl = cleanTriggerUrl(rawUrl);
-        const label = (txt || "").toString().trim().slice(0, 60);
-        if (label && validUrl) {
-            buttons.push([{ text: label, url: validUrl }]);
-        } else if (label) {
-            skipped.push({ label: label, url: (rawUrl || "").toString().slice(0, 120) });
-        }
-    };
-    if (trig) {
-        if (Array.isArray(trig.buttons) && trig.buttons.length > 0) {
-            trig.buttons.forEach((b) => { if (b) pushBtn(b.text, b.url); });
-        } else if (trig.btnText && trig.btnUrl) {
-            pushBtn(trig.btnText, trig.btnUrl);
-        }
-    }
-    return { buttons: buttons, skipped: skipped, markup: buttons.length > 0 ? { inline_keyboard: buttons } : null };
-}
-
 // ---------------- 9. MASTER MESSAGE FILTER ----------------
 // Edit kore gali/link dhokano (edited-message bypass) বন্ধ — message + edited
 // message একই engine-এ চলে। Edit-এ flood count হয় না (notun message na)।
@@ -2073,7 +2066,7 @@ async function onGroupUpdate(msg, isEdit) {
                             if (sent && sent.message_id && tdel > 0) autoDel(chatId, sent.message_id, tdel);
                         } catch (e) {}
                     }).catch((err) => {
-                        console.error("[TRIGGER SEND ERR] chat=" + chatId + " keyword=\"" + trig.keyword + "\":", err.message);
+                        console.error("[TRIGGER SEND ERR] chat=" + chatId + " keyword=\"" + trig.keyword + "\":", err.message, "| hint:", tlErrHint(err));
                         const retry = { reply_to_message_id: msgId, disable_web_page_preview: true };
                         if (built.markup) retry.reply_markup = built.markup;
                         groupBot.sendMessage(chatId, trig.reply, retry).catch(() => {
@@ -2568,7 +2561,8 @@ async function onGroupUpdate(msg, isEdit) {
                             const tdel = cfgNum(at, "deleteSec", 0, 0, 300);
                             if (sent && sent.message_id && tdel > 0) autoDel(chatId, sent.message_id, tdel);
                         } catch (e) {}
-                    }).catch(() => {
+                    }).catch((e) => {
+                        console.error("[ADMIN-TRIGGER SEND ERR] chat=" + chatId + " keyword=\"" + at.keyword + "\":", (e && e.message) || e, "| hint:", tlErrHint(e));
                         const retry = { disable_web_page_preview: true };
                         if (!at.hideCmd) retry.reply_to_message_id = msgId;
                         if (built.markup) retry.reply_markup = built.markup;

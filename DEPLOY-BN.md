@@ -235,3 +235,14 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Fix 5 — Giveaway end jamela na:** result DM/post na gele o giveaway **end + winners Firestore e save hoy** (stuck `active` na thakbe). Unpin fail holeo continue.
 - **Fix 6 — Panel API robust:** 30s timeout + non-JSON server response + network error e clear toast. Flood (429) hole 3s wait + 50ms per-group guard.
 - **Korte hobe:** GitHub push → Render deploy success → panel **Ctrl+F5** hard refresh. Dashboard e **Server URL** web-hook ekhono lagbe (shob bot-send API er jonno). Custom-bot group e bot ke **Admin** (Ban + Delete + Pin) banao.
+
+## AD. Auto-Reply (Trigger) — user/ADMIN duijon kar reply + multi button (2026-10-22)
+- **Reply option panel e ekhon clear:** Group Dashboard -> **Triggers & Keywords** -> **+ Add Reply (Auto-Reply)** form (list-er **upore**, age niche chilo tai dekha jayto na). Keyword + Reply Text + **Reply Dibbe Kake?** (Everyone / Admin only) + **Reply delete sec**.
+- **User ba admin — duijon kar reply dey:** Normal trigger `isAdmin` check-er **age** chole, tai member ba admin jeta keyword likhlei bot reply dey. `Admin only` select korle shudhu admin lekhlei reply (adminTriggers) — `if (isAdmin) return` er age chole tai admin-o trigger pai.
+- **Multi button (max 5):** Reply text-er **niche** button gulo dekhabe (Telegram inline keyboard) — **Label + Link** prottekta row e, `+ Add Button` diye jorano, ✕ diye delete. Panel e **live preview** dekhay (text bubble + button gulo niche, exactly group-er moto).
+- **Button optional:** Kono button na dile shudhu text reply jabe (kono error nai). `@username` o link hisebe cholbe (auto `t.me/`), `javascript:`/`data:` link reject hoy.
+- **Edit + Test:** Protita reply row e **Edit** (form e load kore change kora) + **Test** (group e pathiye dekhano) button. Test e button gulo-o dekhabe.
+- **Bot er `/panel` wizard eo button add kora jay (age chilo na):** `⚡ Add reply` / `👑 Add admin-reply` -> keyword -> reply -> **3️⃣ Button dite chao?** -> `Label | https://link` pathao (bar bar), `0` likhe skip -> delete sec. Maximum 5 button.
+- **Create Rule modal** (Trigger Keyword type) eo optional button field add hoyeche.
+- Bad link / HTML parse error e error hint + plain-text fallback — message chup chup pathay na.
+- **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5** hard refresh.
