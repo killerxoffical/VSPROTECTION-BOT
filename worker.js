@@ -535,33 +535,125 @@ app.post("/api/tg/badwords", async (req, res) => {
     }
 });
 
+// ---------------- 3c. PANEL SEND HELPERS ----------------
+// Bot resolver: panel botId diye instance age, na thakle oi chat er registered bot
+// (tg_groups doc er botId), last e default bot. Custom-bot group e wrong bot diye
+// pathano (403 "bot is not a member") + silent fail - dutoi ekhane off.
+function pickOrNull(botId) {
+    if (!botId || String(botId) === "default") return null;
+    try {
+        return botInstances.has(String(botId)) ? botInstances.get(String(botId)).bot : null;
+    } catch (e) { return null; }
+}
+async function chatBotDoc(chatId) {
+    try {
+        const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+        if (gd && gd.exists) return gd.data() || {};
+    } catch (e) {}
+    return {};
+}
+async function resolveChatBot(chatId, reqBotId) {
+    const doc = await chatBotDoc(chatId);
+    return pickOrNull(reqBotId) || pickOrNull(doc.botId) || groupBot;
+}
+// Telegram error → admin-friendly hint (silent fail hoy na — bot nijei bole dey keno parlo na)
+function tlErrHint(e) {
+    const m = String((e && e.message) || e || "").toLowerCase();
+    if (m.includes("bot is not a member") || m.includes("bot was kicked") || m.includes("not a participant"))
+        return "Bot ei group/channel e member nei — oi group er guardian bot ke abar member banai, tarpor try koro.";
+    if (m.includes("chat not found") || m.includes("peer id invalid"))
+        return "Chat ID bhul / bot chenona — Group ID (-100...) abar check koro (e.g. /id likhe group e).";
+    if (m.includes("bot was blocked") || m.includes("user is deactivated"))
+        return "User bot block koreche / /start dey nai — age bot ke /start dilei DM jabe.";
+    if (m.includes("not enough rights") || m.includes("need administrator"))
+        return "Bot er Admin permission nei — bot ke Admin banao (Delete + Ban + Pin).";
+    if (m.includes("can't parse"))
+        return "Message er HTML parse hoye nai — '<' '>' '&'/half-tag khunje dekho, ba plain text e pathano.";
+    if (m.includes("too many requests"))
+        return "Telegram rate-limit — ektu por eti try koro (minute by minute vul naho).";
+    if (m.includes("message is too long"))
+        return "Message khub lomba — 3500 char er niche rakho.";
+    if (m.includes("photo") && (m.includes("url") || m.includes("invalid") || m.includes("wrong")))
+        return "Photo URL kaj korche na — direct https://... image link dilo (size/extension check).";
+    return String((e && e.message) || e || "").slice(0, 180);
+}
+// smartSendAny: bot candidate chain (reqBot → chat doc bot → default);
+// HTML parse fail hole SAME bot e plain-text retry; onno-no fail hole porer bot e try.
+// Return: {bot, sent} all bolle success — na hole {error} with friendly hint.
+async function smartSendAny(chatId, reqBotId, buildCall) {
+    const cands = [];
+    const rq = pickOrNull(reqBotId);
+    if (rq) cands.push(rq);
+    const docBot = pickOrNull((await chatBotDoc(chatId)).botId);
+    if (docBot && !cands.includes(docBot)) cands.push(docBot);
+    if (!cands.includes(groupBot)) cands.push(groupBot);
+    let lastErr = null;
+    for (const b of cands) {
+        try { return { bot: b, sent: await buildCall(b, false) }; }
+        catch (e1) {
+            lastErr = e1;
+            const m = String((e1 && e1.message) || e1 || "").toLowerCase();
+            if (m.includes("can't parse")) {
+                try { return { bot: b, sent: await buildCall(b, true) }; }
+                catch (e2) { lastErr = e2; break; }
+            }
+        }
+    }
+    return { bot: cands[0], error: tlErrHint(lastErr) };
+}
+
 // ---------------- 4. BROADCAST API ----------------
+// Prottek group tar NIJER registered bot diye pathano hoy (custom-bot group e
+// shared bot member na hole silently skip hoto — ekhon sothik bot + error hint),
+// HTML fail → plain-text retry, 429 hole wait, ar result honestly report hoy.
 app.post("/api/tg/group-broadcast", async (req, res) => {
     const { text, photoUrl, chatId, botId } = req.body;
     if (!text) return res.status(400).json({ ok: false, error: "মেসেজ লিখুন" });
-    const sender = pickBot(botId) || groupBot;
 
     try {
         let targets = [];
         if (chatId) {
-            targets = [chatId.toString()];
+            const cid = String(chatId).trim();
+            targets.push(/^\d+$/.test(cid) ? "-" + cid : cid); // Chat ID vul prefix auto-fix ("100123..." → "-100123...")
         } else {
             const snap = await db.collection("tg_groups").get();
             snap.forEach((d) => targets.push(d.id));
         }
-        let successCount = 0;
+        if (!targets.length) return res.status(400).json({ ok: false, error: "Kono group/channel registered nei — bot ke group e add + Admin banao." });
+
+        const stripHtml = (t) => String(t).replace(/<br\s*\/?>/gi, "\n").replace(/<[^<>\n]+>/g, " ").replace(/[ \t]{2,}/g, " ").trim();
+        let successCount = 0, failCount = 0;
+        const errs = [];
 
         for (const targetId of targets) {
-            try {
+            const out = await smartSendAny(targetId, botId, (bot, isPlain) => {
+                const cap = isPlain ? stripHtml(text) : String(text).slice(0, 1000);
                 if (photoUrl) {
-                    await sender.sendPhoto(targetId, photoUrl, { caption: text, parse_mode: "HTML" });
-                } else {
-                    await sender.sendMessage(targetId, text, { parse_mode: "HTML" });
+                    const o = { caption: cap };
+                    if (!isPlain) o.parse_mode = "HTML";
+                    return bot.sendPhoto(targetId, photoUrl, o);
                 }
+                const o = { disable_web_page_preview: true };
+                if (!isPlain) o.parse_mode = "HTML";
+                return bot.sendMessage(targetId, cap, o);
+            });
+            if (out.error) {
+                failCount++;
+                if (errs.length < 5) errs.push(targetId + " → " + out.error);
+                if (String(out.error).includes("rate-limit")) await new Promise((r) => setTimeout(r, 3000));
+            } else {
                 successCount++;
-            } catch (err) {}
+            }
+            await new Promise((r) => setTimeout(r, 50)); // Telegram flood guard — rate safe
         }
-        return res.json({ ok: true, message: `${successCount} টি গ্রুপে ব্রডকাস্ট পাঠানো হয়েছে!` });
+
+        let msg;
+        if (successCount === 0) {
+            msg = `❌ Kono group/channel ei message jay nai (fail ` + failCount + `/` + targets.length + `)! Karon: ` + (errs[0] || "protection server offline/ghomie ache — Render service check koro");
+        } else {
+            msg = `✅ ` + successCount + ` টি গ্রুপে ব্রডকাস্ট পাঠানো হয়েছে!` + (failCount ? (` (` + failCount + ` টি fail — karon: ` + (errs[0] || "") + `)`) : "");
+        }
+        return res.json({ ok: successCount > 0, success: successCount, failed: failCount, total: targets.length, errors: errs, message: msg });
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
     }
@@ -614,7 +706,7 @@ async function resolveWelcome(chatId, gConf, name) {
 app.post("/api/tg/test-welcome", async (req, res) => {
     const { chatId, botId } = req.body;
     if (!chatId) return res.status(400).json({ ok: false, error: "Group ID দিন" });
-    const sender = pickBot(botId) || groupBot;
+    const sender = await resolveChatBot(String(chatId), botId);
     try {
         let gConf = {};
         try {
@@ -652,23 +744,28 @@ app.post("/api/tg/verify-bot", async (req, res) => {
 });
 
 // Admin -> bot diye group/user ke message (panel Send box)
+// Wrong/missing botId ao kaj kore: request bot → chat er registered bot → default;
+// HTML fail hole plain-text retry; fail hole admin-friendly karon ferot jay (silent fail nei).
 app.post("/api/tg/send-message", async (req, res) => {
     const { chatId, text, userId, replyTo, botId } = req.body;
     if (!chatId || !text) return res.status(400).json({ ok: false, error: "chatId + text দিন" });
-    const sender = pickBot(botId) || groupBot;
     try {
-        const opts = { parse_mode: "HTML", disable_web_page_preview: true };
-        if (replyTo) opts.reply_to_message_id = Number(replyTo);
-        let body = String(text).slice(0, 3500);
-        if (userId) body = `<a href="tg://user?id=${userId}">👤</a> ` + body;
-        const sent = await sender.sendMessage(chatId.toString(), body, opts).catch(async () => {
-            const retry = {};
-            if (replyTo) retry.reply_to_message_id = Number(replyTo);
-            return sender.sendMessage(chatId.toString(), String(text).slice(0, 3500), retry);
+        const cid = String(chatId).trim();
+        const uid = userId ? String(userId).replace(/[^0-9-]/g, "") : "";
+        const body = String(text).slice(0, 3500);
+        const out = await smartSendAny(cid, botId, (bot, isPlain) => {
+            let msg = body;
+            if (!isPlain && uid) msg = `<a href="tg://user?id=` + uid + `">👤</a> ` + msg;
+            else if (isPlain && uid) msg = `[👤 ` + uid + `] ` + msg;
+            const opts = { disable_web_page_preview: true };
+            if (!isPlain) opts.parse_mode = "HTML";
+            if (replyTo) opts.reply_to_message_id = Number(replyTo);
+            return bot.sendMessage(cid, msg, opts);
         });
-        return res.json({ ok: true, message: "পাঠানো হয়েছে!", messageId: sent ? sent.message_id : null });
+        if (out.error) return res.status(500).json({ ok: false, error: out.error });
+        return res.json({ ok: true, message: "পাঠানো হয়েছে!", messageId: (out.sent && out.sent.message_id) || null });
     } catch (e) {
-        return res.status(500).json({ ok: false, error: e.message });
+        return res.status(500).json({ ok: false, error: tlErrHint(e) });
     }
 });
 
@@ -689,7 +786,7 @@ app.post("/api/tg/chat-lock", async (req, res) => {
     const { chatId, locked, botId } = req.body;
     if (!chatId || typeof locked === "undefined") return res.status(400).json({ ok: false, error: "chatId + locked দিন" });
     const isLock = locked === true || locked === "true" || locked === 1 || locked === "1";
-    const sender = pickBot(botId) || groupBot;
+    const sender = await resolveChatBot(String(chatId), botId);
     try {
         await db.collection("tg_groups").doc(chatId.toString()).set({
             chatOff: isLock,
@@ -754,7 +851,7 @@ app.post("/api/tg/test-dm", async (req, res) => {
 app.post("/api/tg/test-trigger", async (req, res) => {
     const { chatId, keyword, botId } = req.body;
     if (!chatId || !keyword) return res.status(400).json({ ok: false, error: "Group + keyword দিন" });
-    const sender = pickBot(botId) || groupBot;
+    const sender = await resolveChatBot(String(chatId), botId);
     try {
         const gDoc = await db.collection("tg_groups").doc(chatId.toString()).get();
         const conf = gDoc.exists ? gDoc.data() : {};
@@ -799,16 +896,18 @@ function fmtLeft(ms) {
     if (h < 48) return `${h} ঘণ্টা${m % 60 ? ` ${m % 60} মিনিট` : ""}`;
     return `${Math.floor(h / 24)} দিন ${h % 24} ঘণ্টা`;
 }
+// HTML-escape (user-supplied title/name/desc e '<' hole Telegram parse fail hoto)
+function escH(t) { return String(t || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
 function giveawayCaption(g, joined) {
     const wc = Math.max(1, Number(g.winnersCount || 1));
     const endMs = giveawayEndsMs(g);
     const timeLine = endMs
         ? `⏳ <b>Ends in:</b> ${fmtLeft(endMs - Date.now())} (live!)\n`
         : (Number(g.durationH) > 0 ? `⏳ <b>Ends in:</b> ${g.durationH} ঘণ্টা (auto-result!)\n` : `⏳ <b>Ends:</b> admin End চাপলে\n`);
-    return `🎊 <b>${g.title}</b> 🎊\n` +
+    return `🎊 <b>${escH(g.title)}</b> 🎊\n` +
         `━━━━━━━━━━━━\n` +
-        `🎁 <b>Prize:</b> ${g.amount ? g.amount + " " : ""}${g.itemName}\n` +
-        (g.desc ? `📝 ${g.desc}\n` : ``) +
+        `🎁 <b>Prize:</b> ${escH((g.amount ? g.amount + " " : "") + g.itemName)}\n` +
+        (g.desc ? `📝 ${escH(String(g.desc).slice(0, 300))}\n` : ``) +
         `🏆 <b>Winners:</b> ${wc} জন   👥 <b>Joined:</b> ${joined}\n` +
         timeLine +
         `━━━━━━━━━━━━\n` +
@@ -816,9 +915,11 @@ function giveawayCaption(g, joined) {
 }
 
 app.post("/api/tg/create-giveaway", async (req, res) => {
-    const { chatId, title, itemName, amount, winnersCount, desc, photoUrl, durationH, bumpH, botId } = req.body;
+    let { chatId, title, itemName, amount, winnersCount, desc, photoUrl, durationH, bumpH, botId } = req.body;
     if (!chatId || !title || !itemName) return res.status(400).json({ ok: false, error: "সবগুলো তথ্য পূরণ করুন" });
-    const sender = pickBot(botId) || groupBot;
+    chatId = String(chatId).trim();
+    if (/^\d+$/.test(chatId)) chatId = "-" + chatId; // Chat ID prefix bhul holei thik hoy
+    const sender = await resolveChatBot(chatId, botId);
     const durH = Math.max(0, Number(durationH) || 0);
     const wc = Math.max(1, Number(winnersCount || 1));
     const bmpH = Math.max(0, Math.min(168, Number(bumpH) || 0));
@@ -875,7 +976,7 @@ async function bumpGiveaway(giveawayId, sender) {
     if (!gDoc.exists) return false;
     const g = gDoc.data();
     if (g.status !== "active") return false;
-    sender = sender || pickBot(g.botId) || groupBot;
+    sender = sender || (await resolveChatBot(String(g.chatId), g.botId));
     const joined = (g.participants || []).length;
     const cap = giveawayCaption(g, joined);
     const markup = giveawayJoinBtn(giveawayId, joined);
@@ -904,7 +1005,7 @@ async function refreshGiveaway(giveawayId, sender) {
     if (!gDoc.exists) return false;
     const g = gDoc.data();
     if (g.status !== "active" || !g.messageId) return false;
-    sender = sender || pickBot(g.botId) || groupBot;
+    sender = sender || (await resolveChatBot(String(g.chatId), g.botId));
     const joined = (g.participants || []).length;
     try {
         const markup = giveawayJoinBtn(giveawayId, joined);
@@ -929,7 +1030,7 @@ async function refreshActiveGiveaways() {
         for (const d of snap.docs) {
             try {
                 const g = d.data();
-                const sender = pickBot(g.botId) || groupBot;
+                const sender = await resolveChatBot(String(g.chatId), g.botId);
                 const endMs = giveawayEndsMs(g);
                 if (endMs && Date.now() > endMs) { await finishGiveaway(d.id, sender).catch(() => {}); continue; }
                 // Bump due? (purono post niche fresh kore ano)
@@ -955,8 +1056,12 @@ app.post("/api/tg/repin-giveaway", async (req, res) => {
         if (!gDoc.exists) return res.status(404).json({ ok: false, error: "Giveaway not found" });
         const g = gDoc.data();
         if (g.status !== "active") return res.status(400).json({ ok: false, error: "Giveaway active nei" });
-        const sender = pickBot(botId) || pickBot(g.botId) || groupBot;
-        await sender.pinChatMessage(g.chatId, g.messageId, { disable_notification: true });
+        const sender = await resolveChatBot(String(g.chatId), botId || g.botId);
+        try {
+            await sender.pinChatMessage(g.chatId, g.messageId, { disable_notification: true });
+        } catch (pe) {
+            return res.status(500).json({ ok: false, error: tlErrHint(pe) });
+        }
         await refreshGiveaway(giveawayId, sender);
         return res.json({ ok: true, message: "📌 Re-pinned + refreshed!" });
     } catch (e) {
@@ -965,6 +1070,12 @@ app.post("/api/tg/repin-giveaway", async (req, res) => {
 });
 
 // Shared finish logic — manual End + auto timer দুটোই ব্যবহার করে
+// HTML send with plain-text fallback; kono throw nahi — giveaway jate always end hoy
+async function sendHtmlBestEffort(sender, chatId, text) {
+    try { await sender.sendMessage(chatId, text, { parse_mode: "HTML" }); }
+    catch (e) { await sender.sendMessage(chatId, String(text).replace(/<[^>]+>/g, "")).catch(() => {}); }
+}
+
 async function finishGiveaway(giveawayId, sender) {
     const gDoc = await db.collection("giveaways").doc(giveawayId).get();
     if (!gDoc.exists) return { ok: false, error: "Giveaway not found" };
@@ -973,7 +1084,7 @@ async function finishGiveaway(giveawayId, sender) {
 
     const participants = g.participants || [];
     if (participants.length === 0) {
-        await sender.sendMessage(g.chatId, `⚠️ <b>${g.title} সমাপ্ত:</b> কোনো অংশগ্রহণকারী পাওয়া যায়নি।`, { parse_mode: "HTML" });
+        await sendHtmlBestEffort(sender, g.chatId, `⚠️ <b>${escH(g.title)} সমাপ্ত:</b> কোনো অংশগ্রহণকারী পাওয়া যায়নি।`);
         await gDoc.ref.update({ status: "ended" });
         return { ok: true, message: "No participants" };
     }
@@ -981,13 +1092,13 @@ async function finishGiveaway(giveawayId, sender) {
     const shuffled = participants.sort(() => 0.5 - Math.random());
     const winners = shuffled.slice(0, Math.min(g.winnersCount, participants.length));
 
-    let winnerText = `🎊 <b>GIVEAWAY RESULT</b> 🎊\n━━━━━━━━━━━━\n\n🎉 <b>${g.title}</b>\n🎁 <b>Prize:</b> ${g.amount ? g.amount + " " : ""}${g.itemName}\n👥 <b>Joined:</b> ${participants.length} জন\n\n`;
+    let winnerText = `🎊 <b>GIVEAWAY RESULT</b> 🎊\n━━━━━━━━━━━━\n\n🎉 <b>${escH(g.title)}</b>\n🎁 <b>Prize:</b> ${escH((g.amount ? g.amount + " " : "") + g.itemName)}\n👥 <b>Joined:</b> ${participants.length} জন\n\n`;
     winners.forEach((w, idx) => {
-        winnerText += `🥇 <b>Winner ${idx + 1}:</b> <a href="tg://user?id=${w.id}">${w.name}</a> (<code>${w.id}</code>)\n`;
+        winnerText += `🥇 <b>Winner ${idx + 1}:</b> <a href="tg://user?id=${w.id}">${escH(w.name)}</a> (<code>${w.id}</code>)\n`;
     });
     winnerText += `\n━━━━━━━━━━━━\n🎉 অভিনন্দন! এডমিনের সাথে যোগাযোগ করে পুরস্কার নাও।`;
 
-    await sender.sendMessage(g.chatId, winnerText, { parse_mode: "HTML" });
+    await sendHtmlBestEffort(sender, g.chatId, winnerText);
     await sender.unpinChatMessage(g.chatId).catch(() => {});
     await gDoc.ref.update({ status: "ended", winners });
 
@@ -998,12 +1109,18 @@ app.post("/api/tg/end-giveaway", async (req, res) => {
     const { giveawayId, botId } = req.body;
     try {
         let sender = pickBot(botId) || null;
+        let gChat = "";
         if (!sender) {
             try {
                 const gd = await db.collection("giveaways").doc(giveawayId).get();
-                if (gd.exists) sender = pickBot(gd.data().botId);
+                if (gd.exists) {
+                    const gg = gd.data();
+                    gChat = String(gg.chatId || "");
+                    sender = pickBot(gg.botId);
+                }
             } catch (e) {}
         }
+        if (!sender && gChat) sender = await resolveChatBot(gChat, null);
         sender = sender || groupBot;
         const out = await finishGiveaway(giveawayId, sender);
         if (!out.ok && out.error === "Giveaway not found") return res.status(404).json(out);
@@ -1018,7 +1135,7 @@ app.post("/api/tg/end-giveaway", async (req, res) => {
 app.post("/api/tg/moderate-user", async (req, res) => {
     const { action, chatId, userId, botId } = req.body;
     if (!chatId || !userId || !action) return res.status(400).json({ ok: false, error: "Missing parameters" });
-    const sender = pickBot(botId) || groupBot;
+    const sender = await resolveChatBot(String(chatId), botId);
 
     try {
         if (action === "ban") {

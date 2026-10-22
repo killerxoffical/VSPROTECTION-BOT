@@ -225,3 +225,13 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - Notun 5 rule **default OFF** (purono group e hothat delete hobe na) — card ON + limit + Save।
 - **+ Create Rule** modal (Dyno modal er moto): Bad Words / Trigger Keyword / 5 automod type — baniye dilei apply।
 - Custom warn text per-rule (Automod card / Custom Messages tab)। Rules Firestore `tg_groups` doc e save — notun field publish লাগে না।
+
+## AC. Panel theke bot-message na jawa — shob send path fix (2026-10-22)
+- **Asol karon:** custom bot connect kora group e panel **default bot** diye pathachilo — oi bot group e member na, tai Telegram 403 dicchilo + server silently fail korachilo. Panel e absulut kono error dekhaito na.
+- **Fix 1 — per-chat bot resolve:** send-message, group-broadcast, test-welcome, test-trigger, chat-lock, moderate-user, giveaway create/bump/refresh/end — sob ekhon chain use kore: **panel request bot → tg_groups doc er botId → default bot**. Custom-bot group e oi group er NIJER bot diye jabe.
+- **Fix 2 — honest report:** broadcast age `0 টি গ্রুপে পাঠানো হয়েছে` dekhiye success ashen hoto — ekhon success/failed/total + per-group error report hoy, Benglish hint soho (bot member na / Chat ID bhul / permission nei).
+- **Fix 3 — HTML parse fail = auto plain-text retry**, message ar jay na. Caption/winner text e `<>&` sanitize (escH) — End-result message parse hoy na emon bhul hobe na.
+- **Fix 4 — Giveaway Chat ID fix:** numeric ID dile auto `-100...` prefix (age `chat not found` ashto). Photo fail hole text-message fallback.
+- **Fix 5 — Giveaway end jamela na:** result DM/post na gele o giveaway **end + winners Firestore e save hoy** (stuck `active` na thakbe). Unpin fail holeo continue.
+- **Fix 6 — Panel API robust:** 30s timeout + non-JSON server response + network error e clear toast. Flood (429) hole 3s wait + 50ms per-group guard.
+- **Korte hobe:** GitHub push → Render deploy success → panel **Ctrl+F5** hard refresh. Dashboard e **Server URL** web-hook ekhono lagbe (shob bot-send API er jonno). Custom-bot group e bot ke **Admin** (Ban + Delete + Pin) banao.
