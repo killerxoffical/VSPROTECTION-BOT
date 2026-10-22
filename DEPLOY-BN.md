@@ -366,3 +366,46 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Hint:** panel e ekhon automatic hint — *"Jodi phrase save ache, bot admin ache, kintu trigger fire hocche na — phir group e phrase likhe 15s por por try koro (cooldown)"*.
 - **API:** `POST /api/tg/diagnose` (chatId + phrase + optional sample) → full report JSON
 - **Korte hobe:** GitHub push → Render redeploy → panel Ctrl+F5 → **Diagnose** click koro → jeta ❌ dekhabe oita-i fix korte hobe.
+
+## AM. Custom command — admin list support + typo hint (2026-10-22)
+- **Screenshot theke 2 ta asol bug paoa gelo:**
+    1. **Admin-Only Replies** list (panel → Triggers → Admin-Only Replies) e banano command e **action IGNORE hoto** — shudhu reply text pathay, warn/ban/mute kaj korto na. Ekhon **action o chole** (normal trigger er moto).
+    2. Oi list er **match rule strict chilo** (message phrase diye START korte hoto) — normal trigger er moto **substring** korechi (jemon `bhai tumi ki mone koro oke warn dewa uchit`).
+- **Screenshot er “✅” message-ta bujha gelo:** line `at.reply || "✅"` — mane **reply text khali thakle bot ekta chokhali “✅” pathay**. Ekhon seta `✅ done` hoy, ar action hole action er asol message ashe.
+- **🔎 Typo hint (notun):** admin er message e kono phrase match na hoy, kintu **60%+ shabd mila** — bot ekhon group e bole dey:
+    `🔎 Apnar message e phrase match hoy nai — mone hocche <code>warn dewa uchit</code> likhte chailen?`
+    → **Ekhon bot chup chup thakbe na** — kichu na holeo hint ashe, tai problem-ta dekhay.
+- **Hint check LAST e hoy** (normal trigger ar admin list dui list check hoyar POR) — karon admin reply cholar age hint chole gele mone hoto na.
+- **Action error gulor try/catch** — action fail korle o reply chole (bot chokhali chup thake na).
+- **Runtime test (13/13 pass):** asol `onGroupUpdate` chaliye check kora — normal list e reply, admin list e reply, empty reply, typo hint, lamba sentence e match, target chara hint, non-admin notice — shob tested.
+- **Korte hobe:** GitHub push → Render redeploy → panel Ctrl+F5.
+
+## AN. Custom Command system REMOVED — built-in command reference thakche (2026-10-22)
+- **Custom command system (Bangla phrase → warn/ban action) puro remove hoye gelo** — future e lagbe na bolar jonno:
+    • **worker.js:** `CMD_ACTIONS`, `CMD_ACTION_LABEL`, `runCmdAction()`, `resolveCmdTarget()`, `phraseSimilar()`, `findNearPhrase()` — shob delete. Trigger e `action` field, `actionVars`/`atVars`/`actRes` — shob baki. Typo-hint block o delete.
+    • **panel.html:** "➕ Notun Custom Command banano" card, custom command list, Action dropdown (`t_action`), action chip, `addCustomCmd()`/`renderCustomCmds()` — shob delete.
+- **Ektai jinis improve hoye gelo:** admin-only reply e **action chilo na** ar match rule strict chilo — dui-i thik kora (reply text + substring match + `✅ Done` fallback).
+- **Jeta THAKCHE (built-in command reference):**
+    • **⚡ Bot Commands — ki kaj kore** section e **22 ta command** dekhay: `/warn` `/warns` `/unwarn` `/resetwarn` `/ban` `/unban` `/kick` `/mute` `/unmute` `/bio` `/scammer` `/unscammer` `/off` `/on` `/id` `/notice` (group) · `/start` `/link` `/unlink` `/panel` `/cancel` `/claim`
+    • Protita command card e: **ki kaj kore** (Bangla desc) + **ki reply dey** (default template) + **je placeholder boshano jay** + **📋 Copy** + **🧪 Test** (group e pathiye dekhay) + **Custom reply** box (apnar nijer text → bot sei text-i dibe)
+    • **📘 Placeholder guide** — `{mention}` `{name}` `{id}` `{count}` `{limit}` `{duration}` `{text}` `{groupId}` `{userId}` `{reason}` konta ki kore, example soho
+    • **🔎 Diagnose** button — group doc ache ki, bot admin ki, message pathate pare ki, cooldown koto
+    • **Triggers tab** (auto-reply) — add/edit/delete reply, keyword, button, cooldown; **Admin-Only Replies** alada list
+- **Auto-reply trigger** (keyword → reply) puro thakche — sirf "action" feature-ta remove hoyeche.
+- **Test:** 8 post-removal runtime + 22 registry checks + syntax/HTML/ID/div — shob pass.
+- **Korte hobe:** GitHub push → Render redeploy → panel Ctrl+F5.
+
+## AO. Warn message shundor + count/limit chara jay na (2026-10-22)
+- **Report:** warn message ar warn count dekhay na. **Asol karon:** Commands section e kono command er **Custom reply** save korle (`cmdTexts`) sei text **puro default message ke replace** kore — tai default er `(${n}/${limit})` count/limit **haraye jeto**.
+- **Fix 1 — count/limit ekhon kono shomoy harai na:** custom text e `{count}`/`{limit}` **na thakle** bot nijei **📊 stat line add kore**:
+    `custom warn text` + `📊 Warn count: 2/5`
+- **Fix 2 — message gulo shundor kora (multi-line):**
+    • `/warn` → `⚠️ WARN` / `👤 <mention>` / `📊 Warn count: 3 / 5` / `📝 Reason: spam`
+    • `/warns` → `📋 WARN REPORT` / `👤 <mention>` / `📊 Total warn: 3`
+    • `/unwarn` → `↩️ WARN REMOVED` / `👤 <mention>` / `📊 Remaining warn: 2`
+    • `/resetwarn` → `🗑️ WARN CLEARED` / `👤 <mention>` / `✅ Sob warn clear hoyeche`
+    • **Gali filter** er warn → `⚠️ WARNING` / `👤 <mention>` / `💬 <text>` / `📊 Warn count: 2 / 5`
+    • Last warning → `🚨 LAST WARNING` · Mute → `🔇 MUTED` · Ban → `🚨 BANNED` (shob e count/limit)
+- **Panel e oi command er `Ki reply dey` box e** notun shundor message dekhabe (registry theke ase).
+- **Test:** 8 runtime (asol onGroupUpdate chaliye) + 16 message check — shob pass.
+- **Korte hobe:** GitHub push → Render redeploy → panel Ctrl+F5.
