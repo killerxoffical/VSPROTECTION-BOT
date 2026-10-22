@@ -303,3 +303,20 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Kothay banabo:** Panel → **⚡ Commands & Replies** → upore **➕ Notun Custom Command banano** card. Niche **Apnar banano custom command (list)** — phir Edit/Delete. (Triggers tab eo notun **Action** dropdown add hoyeche.)
 - **Built-in command er reply edit:** same Commands section e protita built-in command card er **Default reply** edit kora jay → oi command er reply change hoy (age addTrigger/msg change hoyilo).
 - **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5**.
+
+## AI. Placeholder guide panel e (2026-10-22)
+- **Commands & Replies** section e ekhon **📘 Placeholder guide** card — protita placeholder er ki kaj kore, ki dey, example — click korle copy hoy.
+- **10 ta placeholder:**
+    • `{mention}` — user er **clickable mention** (naam dekhay, tap korle profile khule) → `<a href="tg://user?id=555123">Rahim Mia</a>`
+    • `{name}` — user er naam (plain, clickable na) → `Rahim Mia`
+    • `{id}` — user er Telegram ID → `555123`
+    • `{count}` — ekhon koto warn ache → `3`
+    • `{limit}` — group er warn limit → `5` (`{count}/{limit}` → `3/5`)
+    • `{duration}` — mute kotokhon → `১ ঘণ্টা`
+    • `{text}` — admin ja pura message likhechilen → `ei bot tumi ki mone koro oke warn dewa uchit`
+    • `{groupId}` — group er ID → `-1001234567890`
+    • `{userId}` — command use korar admin er ID → `999888777`
+    • `{reason}` — warn command e admin er reason (shudhu `/warn` e) → `spam korchilo`
+- Built-in command card er placeholder chip gulo o ekhon **clickable** + hover e tooltip (ki dey) dekhay.
+- Worker protita documented placeholder **actually provide kore** (10/10 verified) — likhe fele kono blank ba `{count}` chara raw placeholder baki thake na.
+- **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5**.
