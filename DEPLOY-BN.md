@@ -246,3 +246,19 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Create Rule modal** (Trigger Keyword type) eo optional button field add hoyeche.
 - Bad link / HTML parse error e error hint + plain-text fallback — message chup chup pathay na.
 - **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5** hard refresh.
+
+## AE. Admin notification fix (gali/name-change/welcome) + USER PROFILE (bio) (2026-10-22)
+- **Notification kaj korchilo na — 3 ta karon:** (1) `dmAdmins` module-level chilo → **default shared bot** diye DM pathachilo, custom-bot group e oi bot admin er DM e chilo na. Ekhon **prati call e oi group er nijer bot** (`groupBot`) pass hoy. (2) Panel e admin ID na thakle list khali → keu DM pey na. Ekhon **Telegram theke group er asol admin der list auto-detect** hoy (creator + administrator), panel list er sathe merge hoy. (3) DM fail hole chup chup chup hoto — ekhon `/start` na kora admin ke detect hoy (`bot_e_start_dewa_nei`).
+- **Je gulo admin DM dey (6 ta):** Welcome (new member), **Gali alert**, **Name change** (notun add hoyeche), Leave, Live event, Fake-title decline.
+- **👉 DM na jay → admin ke bot er DM e `/start` dite hobe.** Telegram bot DM pathate pare na seta na janle DM kaj kore na. Panel → Trackers → hint o update hoyeche.
+- **`/bio` (alias `/profile`, `/userinfo`) — USER PROFILE:** group e likho `bio` (ba `/bio`), tar sathe reply/@mention/ID dile **user er shob data** dekhay:
+    • Name, Username, User ID
+    • **Koto warn** ache (ei group e)
+    • **Name change history** — kobe kobe name badlache, **age ki name chilo** (sonoto age theke, timestamp soho)
+    • Scammer list e ache ki na
+    • Koto message pathayche, last seen, first seen
+    • **Gali log** — ki ki bollo, kon word dhralo
+- Profile **admin only** (group e kichu data leak na hoy). Reply kore, @mention kore, ba ID likhe — shobchinte kaj kore. Target na thakle nijer profile dekhay.
+- **Panel eo Profile button:** Members list + Warns list e **Profile** button → full profile modal (name, warn, name history, gali log, scammer).
+- **API:** `POST /api/tg/user-bio` (chatId + userId) → full profile HTML + JSON data.
+- **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5** hard refresh.

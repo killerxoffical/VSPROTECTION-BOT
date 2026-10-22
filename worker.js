@@ -848,6 +848,29 @@ app.post("/api/tg/test-dm", async (req, res) => {
 });
 
 // Trigger test: keyword reply + buttons গ্রুপে পাঠিয়ে চেক করা
+// ── USER BIO API (panel + bot er profile data) ──
+app.post("/api/tg/user-bio", async (req, res) => {
+    const { chatId, userId, name, username } = req.body;
+    if (!chatId || !userId) return res.status(400).json({ ok: false, error: "Group + user ID দিন" });
+    try {
+        const p = await buildUserProfile(String(chatId), String(userId), name || "", username || "");
+        if (!p.found) return res.status(404).json({ ok: false, error: "User data পাওয়া যায়নি" });
+        return res.json({
+            ok: true,
+            html: p.html,
+            warnCount: p.warnCount,
+            msgCount: p.msgCount,
+            name: p.name,
+            username: p.username,
+            scammer: p.scammer,
+            galiCount: p.galiCount,
+            prevNames: p.prevNames
+        });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
 app.post("/api/tg/test-trigger", async (req, res) => {
     const { chatId, keyword, botId, kind } = req.body;
     if (!chatId || !keyword) return res.status(400).json({ ok: false, error: "Group + keyword দিন" });
@@ -899,6 +922,163 @@ function fmtLeft(ms) {
     return `${Math.floor(h / 24)} দিন ${h % 24} ঘণ্টা`;
 }
 // HTML-escape (user-supplied title/name/desc e '<' hole Telegram parse fail hoto)
+// ══════════════════════════════════════════════════════════════
+// USER PROFILE (bio) — full data for a user
+//   /bio  |  /bio @user  |  /bio <id>  |  reply to a message + /bio
+//   Shows: warns, name-change history (old name + when), scammer,
+//          msg count, join info, and all recorded gali incidents.
+// ══════════════════════════════════════════════════════════════
+function fmtWhen(ts) {
+    try {
+        if (!ts) return "-";
+        let d = ts;
+        if (typeof ts === "object" && ts.toMillis) d = ts.toMillis();
+        else if (typeof ts === "object" && ts.seconds) d = ts.seconds * 1000;
+        else if (typeof ts === "string") d = Date.parse(ts);
+        else if (typeof ts === "number") d = ts;
+        if (!isFinite(d) || d <= 0) return "-";
+        const dt = new Date(d);
+        const p = (n) => String(n).padStart(2, "0");
+        return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())} ${p(dt.getHours())}:${p(dt.getMinutes())}`;
+    } catch (e) { return "-"; }
+}
+function fmtAgo(ts) {
+    try {
+        let d = ts;
+        if (ts && typeof ts === "object" && ts.toMillis) d = ts.toMillis();
+        else if (ts && typeof ts === "object" && ts.seconds) d = ts.seconds * 1000;
+        else if (typeof ts === "string") d = Date.parse(ts);
+        if (!isFinite(d) || d <= 0) return "-";
+        const s = Math.floor((Date.now() - d) / 1000);
+        if (s < 60) return s + "s ago";
+        if (s < 3600) return Math.floor(s / 60) + "m ago";
+        if (s < 86400) return Math.floor(s / 3600) + "h ago";
+        if (s < 2592000) return Math.floor(s / 86400) + "d ago";
+        return fmtWhen(d);
+    } catch (e) { return "-"; }
+}
+function escBio(t) { return String(t == null ? "" : t).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
+
+// Full profile builder — returns { html, found }
+async function buildUserProfile(chatId, userId, fallbackName, fallbackUsername) {
+    const uid = String(userId || "").trim();
+    if (!/^\d{5,}$/.test(uid)) return { html: "", found: false };
+    const out = [];
+    let name = fallbackName || "";
+    let username = fallbackUsername || "";
+    let warnCount = 0;
+    let msgCount = 0;
+    let scammer = false;
+    let scammerBy = "";
+    let firstSeen = null;
+    let lastSeen = null;
+    let prevNames = [];
+    let galiCount = 0;
+    let galiRows = [];
+
+    // 1) member record (tg_members)
+    try {
+        const m = await db.collection("tg_members").doc(`${chatId}_${uid}`).get();
+        if (m.exists) {
+            const d = m.data() || {};
+            if (d.name) name = d.name;
+            if (d.username) username = d.username;
+            msgCount = Number(d.msgCount || 0);
+            lastSeen = d.lastSeen || null;
+            firstSeen = d.firstSeen || d.createdAt || null;
+        }
+    } catch (e) {}
+    // 2) warn count
+    try {
+        const w = await db.collection("tg_warns").doc(`${chatId}:${uid}`).get();
+        if (w.exists) warnCount = Number((w.data() || {}).count || 0);
+    } catch (e) {}
+    // 3) name-change history (tg_user_history)
+    try {
+        const h = await db.collection("tg_user_history").doc(uid).get();
+        if (h.exists) {
+            const d = h.data() || {};
+            if (!name && d.name) name = d.name;
+            if (!username && d.username) username = d.username;
+            if (Array.isArray(d.previousNames)) prevNames = d.previousNames;
+            if (!firstSeen && d.createdAt) firstSeen = d.createdAt;
+        }
+    } catch (e) {}
+    // 4) scammer registry
+    try {
+        const s = await db.collection("tg_scammers").doc(uid).get();
+        if (s.exists && (s.data() || {}).isScammer) {
+            scammer = true;
+            scammerBy = String((s.data() || {}).taggedBy || "");
+        }
+    } catch (e) {}
+    // 5) gali incidents (recent)
+    try {
+        const g = await db.collection("tg_gali_log").where("userId", "==", uid).limit(20).get().catch(() => null);
+        if (g && !g.empty) {
+            galiRows = g.docs.map((d) => d.data() || {});
+            galiCount = galiRows.length;
+        }
+    } catch (e) {}
+
+    const mention = `<a href="tg://user?id=${uid}">${escBio(name || uid)}</a>`;
+    const unTxt = username && username !== "None" ? "@" + String(username).replace(/^@/, "") : "-";
+
+    out.push(`👤 <b>USER PROFILE</b>`);
+    out.push(`━━━━━━━━━━━━━━━━━━`);
+    out.push(`👤 <b>Name:</b> ${mention}`);
+    out.push(`🔖 <b>Username:</b> ${escBio(unTxt)}`);
+    out.push(`🆔 <b>ID:</b> <code>${uid}</code>`);
+    out.push(`━━━━━━━━━━━━━━━━━━`);
+    out.push(`⚠️ <b>Warns:</b> <code>${warnCount}</code>${warnCount > 0 ? " 🔴" : " 🟢"}`);
+    out.push(`💬 <b>Messages:</b> <code>${msgCount}</code>`);
+    if (scammer) {
+        out.push(`🚨 <b>Scammer:</b> 🔴 YES${scammerBy ? ` (tagged by <code>${escBio(scammerBy)}</code>)` : ""}`);
+    } else {
+        out.push(`✅ <b>Scammer:</b> Not listed`);
+    }
+    out.push(`🕐 <b>Last seen:</b> ${escBio(fmtAgo(lastSeen))}`);
+    out.push(`📅 <b>First seen:</b> ${escBio(fmtWhen(firstSeen))}`);
+
+    // name change history
+    out.push(`━━━━━━━━━━━━━━━━━━`);
+    out.push(`🔄 <b>Name change history</b> (${prevNames.length})`);
+    if (!prevNames.length) {
+        out.push(`   <i>Kono name change record nai — name sofar stable.</i>`);
+    } else {
+        const sorted = prevNames.slice().sort((a, b) => {
+            const ta = (a && a.at) ? (a.at.toMillis ? a.at.toMillis() : (a.at.seconds || 0) * 1000) : 0;
+            const tb = (b && b.at) ? (b.at.toMillis ? b.at.toMillis() : (b.at.seconds || 0) * 1000) : 0;
+            return tb - ta;
+        });
+        sorted.slice(0, 10).forEach((p, i) => {
+            const pn = escBio(p.name || "-");
+            const pu = (p.username && p.username !== "None") ? "@" + String(p.username).replace(/^@/, "") : "-";
+            out.push(`   ${i + 1}. <b>${pn}</b> ${escBio(pu)} — <i>${escBio(fmtWhen(p.at))}</i>`);
+        });
+        if (sorted.length > 10) out.push(`   <i>… ar ${sorted.length - 10} ta arocche</i>`);
+    }
+
+    // gali incidents
+    out.push(`━━━━━━━━━━━━━━━━━━`);
+    out.push(`📋 <b>Gali log</b> (${galiCount}${galiCount >= 20 ? "+" : ""})`);
+    if (!galiCount) {
+        out.push(`   <i>Kono gali record nai.</i>`);
+    } else {
+        galiRows.slice(0, 6).forEach((g) => {
+            const when = escBio(fmtAgo(g.createdAt));
+            const matched = g.matched ? `<code>${escBio(g.matched)}</code>` : "-";
+            const txt = escBio(String(g.text || "").slice(0, 90));
+            out.push(`   • <i>${txt}</i> — ${matched} <i>(${when})</i>`);
+        });
+        if (galiCount > 6) out.push(`   <i>… ar ${galiCount - 6} ta arocche</i>`);
+    }
+    out.push(`━━━━━━━━━━━━━━━━━━`);
+    out.push(`<i>Admin only — data ei group er member der jonno.</i>`);
+
+    return { html: out.join("\n"), found: true, warnCount, msgCount, name, username, scammer, galiCount, prevNames: prevNames.length };
+}
+
 function escH(t) { return String(t || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
 function giveawayCaption(g, joined) {
     const wc = Math.max(1, Number(g.winnersCount || 1));
@@ -1809,9 +1989,23 @@ function autoDel(chatId, messageId, sec) {
     if (!sec || sec <= 0 || !messageId) return;
     setTimeout(() => groupBot.deleteMessage(chatId, messageId).catch(() => {}), sec * 1000);
 }
-// Admin DM list (live/gali alert যাবে) + throttle map
+// Admin DM list (live/gali/name-change/welcome alert যাবে) + throttle map
 const notifySeen = new Map();
-async function getNotifyAdmins(chatId, conf) {
+// group er ASOL admin der list (Telegram theke — panel e ID na thakleo DM jabe)
+async function getGroupAdminIds(chatId, botInst) {
+    try {
+        const api = botInst || groupBot;
+        const list = await api.getChatAdministrators(chatId);
+        const ids = [];
+        for (const a of list) {
+            if (!a || !a.user) continue;
+            const st = a.status || "";
+            if (st === "creator" || st === "administrator") ids.push(a.user.id.toString());
+        }
+        return [...new Set(ids)].filter((x) => /^\d{5,}$/.test(x)).slice(0, 20);
+    } catch (e) { return []; }
+}
+async function getNotifyAdmins(chatId, conf, botInst) {
     let lst = Array.isArray(conf && conf.notifyAdmins) ? conf.notifyAdmins.map((x) => String(x)) : [];
     if (!lst.length) {
         try {
@@ -1819,19 +2013,37 @@ async function getNotifyAdmins(chatId, conf) {
             if (gd.exists) lst = ((gd.data() || {}).notifyAdmins || []).map((x) => String(x));
         } catch (e) {}
     }
-    return [...new Set(lst)].filter((x) => /^\d{5,}$/.test(x)).slice(0, 5);
+    // Panel e ID na dileo group er asol admin der DM jabe (auto-detect)
+    const auto = await getGroupAdminIds(chatId, botInst);
+    for (const a of auto) if (!lst.includes(a)) lst.push(a);
+    return [...new Set(lst)].filter((x) => /^\d{5,}$/.test(x)).slice(0, 20);
 }
-async function dmAdmins(chatId, conf, html) {
+// DM pathay — HTML fail hole plain-text retry. /start na kora admin ke hint dey.
+async function dmAdmins(chatId, conf, html, botInst) {
+    const sent = [];
+    const failed = [];
     try {
-        const lst = await getNotifyAdmins(chatId, conf);
+        const api = botInst || groupBot;
+        const lst = await getNotifyAdmins(chatId, conf, botInst);
+        if (!lst.length) return { sent, failed, noAdmin: true };
         for (const aid of lst) {
-            try { await groupBot.sendMessage(aid, html, { parse_mode: "HTML", disable_web_page_preview: true }); }
-            catch (e) {
-                try { await groupBot.sendMessage(aid, html.replace(/<[^>]*>/g, ""), { disable_web_page_preview: true }); } catch (e2) {}
+            try {
+                await api.sendMessage(aid, html, { parse_mode: "HTML", disable_web_page_preview: true });
+                sent.push(aid);
+            } catch (e) {
+                try {
+                    await api.sendMessage(aid, html.replace(/<[^>]*>/g, ""), { disable_web_page_preview: true });
+                    sent.push(aid);
+                } catch (e2) {
+                    const m2 = String((e2 && e2.message) || e2).toLowerCase();
+                    failed.push({ id: aid, reason: (m2.includes("initiate") || m2.includes("blocked") || m2.includes("deactivated") || m2.includes("not found")) ? "bot_e_start_dewa_nei" : "dm_fail" });
+                }
             }
         }
     } catch (e) {}
+    return { sent, failed, noAdmin: false };
 }
+
 // Join/Leave/Live event → admin panel (tg_events) e save — panel Trackers tab e dekha jabe
 async function logEvent(chatId, type, extra) {
     try {
@@ -2032,7 +2244,7 @@ async function onGroupUpdate(msg, isEdit) {
                 // 2) bot DM → gali alert er moto (username soho sundor kore)
                 if (cfgBool(groupConf, "liveNotifyOn", true)) {
                     await dmAdmins(chatId, groupConf,
-                        `${evEmoji} <b>LIVE Alert</b>\n\n${userLine}\n📍 <b>${groupTitle}</b> (<code>${chatId}</code>)\n🎥 <b>Status:</b> ${evTitle}\n\nGroup call button e chap diye join koro.`);
+                        `${evEmoji} <b>LIVE Alert</b>\n\n${userLine}\n📍 <b>${groupTitle}</b> (<code>${chatId}</code>)\n🎥 <b>Status:</b> ${evTitle}\n\nGroup call button e chap diye join koro.`, groupBot);
                 }
             } catch (e) {}
             return;
@@ -2177,7 +2389,7 @@ async function onGroupUpdate(msg, isEdit) {
                         await groupBot.sendMessage(chatId, `👋 <b>${lvName}</b> left the group.`, { parse_mode: "HTML" }).catch(() => {});
                         // admin DM — bot ei pathabe
                         await dmAdmins(chatId, groupConf,
-                            `👋 <b>Member left</b>\n\n👤 <a href="tg://user?id=${lvId}">${lvName}</a> ${lvUn} (<code>${lvId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b> (<code>${chatId}</code>)`);
+                            `👋 <b>Member left</b>\n\n👤 <a href="tg://user?id=${lvId}">${lvName}</a> ${lvUn} (<code>${lvId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b> (<code>${chatId}</code>)`, groupBot);
                     }
                     // admin panel log (ON/OFF nirbisheshe — panel e history thakbe)
                     try {
@@ -2329,11 +2541,15 @@ async function onGroupUpdate(msg, isEdit) {
 
         // Mod commands — group থেকেই ban/unban/kick/mute/unmute/warn/unwarn (panel খোলা লাগে না, admin only)
         // Target: reply / @mention / tap-mention / ID — sob chole. Ex: /warn @user, /mute @user 30, /warns
+        // /bio, /profile, /userinfo — sob alias
+        const bioCmd = isCommand(text, "/bio") || isCommand(text, "/profile") || isCommand(text, "/userinfo") ||
+            /^\s*(bio|profile|userinfo)\s*$/i.test(text || "");
         if (isCommand(text, "/ban") || isCommand(text, "/unban") || isCommand(text, "/kick") ||
             isCommand(text, "/mute") || isCommand(text, "/unmute") ||
             isCommand(text, "/warn") || isCommand(text, "/warns") ||
             isCommand(text, "/unwarn") || isCommand(text, "/removewarn") ||
-            isCommand(text, "/resetwarn") || isCommand(text, "/clearwarn")) {
+            isCommand(text, "/resetwarn") || isCommand(text, "/clearwarn") ||
+            isCommand(text, "/bio") || isCommand(text, "/profile") || isCommand(text, "/userinfo") || bioCmd) {
             if (!isAdmin) {
                 const w = await groupBot.sendMessage(chatId, `⚠️ এই কমান্ড কেবল গ্রুপ এডমিনদের জন্য!`, { parse_mode: "HTML", reply_to_message_id: msgId });
                 autoDel(chatId, w.message_id, warnDeleteSec(groupConf));
@@ -2385,7 +2601,7 @@ async function onGroupUpdate(msg, isEdit) {
                 await groupBot.sendMessage(chatId, `❌ <b>${cleanName(tgt.name)}</b> কে member list-এ পাওয়া যায়নি!\nতাকে গ্রুপে একবার message দিতে বলো — তারপর <b>reply</b> / <b>@mention</b> / <b>ID</b> দিয়ে আবার দাও।`, { parse_mode: "HTML", reply_to_message_id: msgId });
                 return;
             }
-            if (!tgt && !isCommand(text, "/warns")) {
+            if (!tgt && !isCommand(text, "/warns") && !isCommand(text, "/bio") && !isCommand(text, "/profile") && !isCommand(text, "/userinfo")) {
                 await groupBot.sendMessage(chatId, `💡 যার উপর চালাবে তাকে <b>reply</b> দাও, <b>@mention</b> করো বা <b>ID</b> লিখো।\nযেমন: <code>/warn @username</code>`, { parse_mode: "HTML", reply_to_message_id: msgId });
                 return;
             }
@@ -2489,6 +2705,19 @@ async function onGroupUpdate(msg, isEdit) {
             } else if (isCommand(text, "/resetwarn") || isCommand(text, "/clearwarn")) {
                 await clearWarn(chatId, tgt.id);
                 await groupBot.sendMessage(chatId, `🗑️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর সব ওয়ার্ন <b>clear</b> করা হলো!`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+            } else if (bioCmd) {
+                // 👤 USER BIO — full profile (warns, name-change history, gali log, scammer)
+                const bid = (tgt && tgt.id) ? String(tgt.id) : String(fromUser.id);
+                const bname = (tgt && tgt.name) ? tgt.name : currentName;
+                const buname = (tgt && tgt.name) ? "" : currentUsername;
+                const p = await buildUserProfile(chatId, bid, bname, buname);
+                if (!p.found) {
+                    await groupBot.sendMessage(chatId, `❌ <b>${cleanName(bname)}</b> (${bid}) er kono data paya jay ni — member list e nai.`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                } else {
+                    await groupBot.sendMessage(chatId, p.html, { parse_mode: "HTML", reply_to_message_id: msgId, disable_web_page_preview: true }).catch(async () => {
+                        await groupBot.sendMessage(chatId, p.html.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => {});
+                    });
+                }
             } else if (isCommand(text, "/warns")) {
                 const qid = tgt ? tgt.id : fromUser.id.toString();
                 const qn = tgt ? tgt.name : currentName;
@@ -2584,6 +2813,12 @@ async function onGroupUpdate(msg, isEdit) {
                     const oldUsername = oldData.username || "";
                     if (oldName !== currentName || oldUsername !== currentUsername) {
                         await groupBot.sendMessage(chatId, buildNameChangeAlert(currentName, userId, oldName, oldUsername, currentUsername), { parse_mode: "HTML" }).catch(() => {});
+                        // Admin DM: name change notification
+                        try {
+                            await dmAdmins(chatId, groupConf,
+                                `🔄 <b>Name Changed</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b> (${chatId})\n🔁 <b>Old name:</b> <code>${oldName || "-"}</code>\n🔁 <b>New name:</b> <code>${currentName}</code>\n🔁 <b>Old username:</b> <code>${oldUsername || "-"}</code>\n🔁 <b>New username:</b> <code>${currentUsername}</code>`,
+                                groupBot);
+                        } catch (e) {}
                         await userDocRef0.set({
                             name: currentName,
                             username: currentUsername,
@@ -2699,7 +2934,7 @@ async function onGroupUpdate(msg, isEdit) {
                         if (cfgBool(groupConf, "galiDmOn", true)) {
                             const short = String(text || "").slice(0, 300);
                             await dmAdmins(chatId, groupConf,
-                                `🚫 <b>Fake-title decline</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n⚠️ Fake title: <b>${cleanName(hit)}</b> → ${fdel ? "deleted ✅" : "kept"}`);
+                                `🚫 <b>Fake-title decline</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n⚠️ Fake title: <b>${cleanName(hit)}</b> → ${fdel ? "deleted ✅" : "kept"}`, groupBot);
                         }
                     } catch (e) {}
                     try {
@@ -2884,7 +3119,7 @@ async function onGroupUpdate(msg, isEdit) {
                         const short = text.slice(0, 300);
                         const acted = curWarns >= limit ? (action === "mute" ? "1h mute" : action === "warn" ? "last warn" : "ban") : `warn ${curWarns}/${limit}`;
                         await dmAdmins(chatId, groupConf,
-                            `🚨 <b>Gali Alert</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n🎯 <b>Matched:</b> <code>${cleanName(matchedWord) || "-"}</code>\n⚠️ Action: <b>${acted}</b>`);
+                            `🚨 <b>Gali Alert</b>\n\n👤 <a href="tg://user?id=${userId}">${cleanName(currentName)}</a> ${currentUsername} (<code>${userId}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b>\n💬 <i>${cleanName(short)}</i>\n🎯 <b>Matched:</b> <code>${cleanName(matchedWord) || "-"}</code>\n⚠️ Action: <b>${acted}</b>`, groupBot);
                     }
                 } catch (e) {}
                 return;
@@ -2943,6 +3178,12 @@ groupBot.on("new_chat_members", async (msg) => {
 
             if (sentWelcome) {
                 lastWelcomeMessages.set(chatId, sentWelcome.message_id);
+                // Admin DM: new member joined
+                try {
+                    await dmAdmins(chatId, gConf,
+                        `🏩 <b>New Member</b>\n\n👤 <a href="tg://user?id=${user.id}">${cleanName(name)}</a>${user.username ? " @" + user.username : ""} (<code>${user.id}</code>)\n📍 <b>${cleanName(msg.chat.title)}</b> (${chatId})\n📥 Joined: <b>${escH(fmtWhen(Date.now()))}</b>`,
+                        groupBot);
+                } catch (e) {}
                 autoDel(chatId, sentWelcome.message_id, w.deleteSec);
             }
         }
