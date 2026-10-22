@@ -342,3 +342,27 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
     • `server off / URL thik na` = Server URL thik nai (Dashboard → Server Webhook)
 - **API:** `POST /api/tg/test-cmd` (chatId + cmd + kind + keyword) · `GET /api/tg/version` (live feature check)
 - **Korte hobe:** GitHub push → Render redeploy → panel **Ctrl+F5** → Commands section e version chip `✓` dekho, tarpor Test button chalao.
+
+## AK. Slash lagbe na — custom phrase plain Bangla (2026-10-22)
+- **Custom command / phrase e kono `/` lagbe na.** Jemon tumi set korcho `warn dewa uchit` — group e **plain text** hisabe likho:
+    `ei bot tumi ki mone koro oke warn dewa uchit` (user ke reply/@mention kore)
+- **Kivabe match hoy:** phrase **3 character er beshi** hole message e **kotha-o** phrase ta thakle match hoy (substring). Tai `bhai tumi ki mone koro oke warn dewa uchit? ami pure sochi` — eo match hobe.
+- **3 character chhoto phrase** (jemon `ok`, `buy`) hole **alada shabd** hisabe dekhay (word boundary) — `book` e `ok` thakle match hobe na.
+- **Case** matter kore na — message ar phrase dui-i lowercase kore dekhay. `Warn Dewa Uchit` o chole.
+- **Built-in command** (jemon `/warn`, `/ban`, `/off`) — eghulo **slash diye** likhte hoy. Phrase banale slash chara.
+- Panel e ekhon hint likha ache: phrase field e `slash lagbe na!` — oi field e `/` dile o cholbe (kintar dorkar nai).
+
+## AL. 🔎 Diagnose button — keno reply dey na (2026-10-22)
+- **Problem:** group e reply kore phrase likhchi kintu kichui hoy na. Ekhon guess na kore — **Diagnose** button diye server theke EXACT karon dekhano jay.
+- **Kothay:** Panel → **⚡ Commands & Replies** → custom command card e **🔎 Diagnose — keno reply dey na** button. (Triggers tab e o ekta chhoto **🔎 Diagnose** button.)
+- **Ki check kore:**
+    • Ei group doc Firestore e ache ki
+    • Ei group e koto command save hoyeche ar **ki ki** (phrase, action, reply — list akare dekhay)
+    • Apnar phrase **EXACTLY** save hoyeche ki (typo hole "EXACTLY save hoyeche" check fail kore — exact spelling dekhay)
+    • Apnar message e phrase dhore ki
+    • **Cooldown** koto second (default 15s — ekhi user ekhi phrase 15s por por abar likhle **skip** hoy!)
+    • Bot group e **ADMIN** ki (status dekhay), bot message pathate **pare** ki
+    • Action command hole: shudhu admin use korte parbe
+- **Hint:** panel e ekhon automatic hint — *"Jodi phrase save ache, bot admin ache, kintu trigger fire hocche na — phir group e phrase likhe 15s por por try koro (cooldown)"*.
+- **API:** `POST /api/tg/diagnose` (chatId + phrase + optional sample) → full report JSON
+- **Korte hobe:** GitHub push → Render redeploy → panel Ctrl+F5 → **Diagnose** click koro → jeta ❌ dekhabe oita-i fix korte hobe.

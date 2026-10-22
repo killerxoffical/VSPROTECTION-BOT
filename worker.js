@@ -3890,6 +3890,107 @@ db.collection("tg_groups").onSnapshot((snap) => {
 
 // Debug: group registered kina check (browser e khulle dekha jay)
 // Deploy version check — panel e live version dekha jay
+// ── DIAGNOSE — admin er jonno: ki missing, ki hocche, keno trigger fire hocche na
+app.post("/api/tg/diagnose", async (req, res) => {
+    const { chatId, phrase, sample } = req.body;
+    const out = {
+        ok: true,
+        server: "2026-10-22-customcmd",
+        checks: [],
+        info: {}
+    };
+    const add = (name, pass, detail) => { out.checks.push({ name, pass: !!pass, detail: detail || "" }); };
+
+    try {
+        if (!chatId) return res.status(400).json({ ok: false, error: "Group ID দিন" });
+
+        // 1) group doc
+        const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+        const conf = gd.exists ? (gd.data() || {}) : {};
+        out.info.groupFound = gd.exists;
+        add("Group doc Firestore e ache", gd.exists, gd.exists ? "" : "group doc nai — panel e oi group select koro");
+
+        // 2) triggers stored
+        const triggers = Array.isArray(conf.triggers) ? conf.triggers : [];
+        out.info.triggerCount = triggers.length;
+        out.info.triggers = triggers.map((t) => ({
+            keyword: t.keyword || "",
+            action: t.action || "reply",
+            reply: (t.reply || "").slice(0, 80),
+            deleteSec: t.deleteSec || 0
+        }));
+        add("Ei group e trigger/command ache", triggers.length > 0, triggers.length + " ta");
+
+        // 3) phrase match
+        if (phrase) {
+            const ph = String(phrase).toLowerCase().trim();
+            const exact = triggers.find((t) => String(t.keyword || "").toLowerCase().trim() === ph);
+            const loose = triggers.find((t) => String(t.keyword || "").toLowerCase().includes(ph) || ph.includes(String(t.keyword || "").toLowerCase()));
+            out.info.phraseFoundExact = !!exact;
+            out.info.phraseFoundLoose = !!(loose || exact);
+            out.info.phrase = ph;
+            add("Apnar phrase EXACTLY save hoyeche", exact,
+                exact ? `action=${exact.action || "reply"}` : (loose ? `SAVE HOYE "loose" na — exact match: "${loose.keyword}"` : "ei phrase group e nai!"));
+            if (exact) {
+                out.info.savedAction = exact.action || "reply";
+                out.info.savedReply = exact.reply || "";
+            }
+        }
+
+        // 4) sample message match test
+        if (sample && phrase) {
+            const hay = String(sample).toLowerCase().trim();
+            const kw = String(phrase).toLowerCase().trim();
+            const hit = hay.includes(kw);
+            out.info.sampleMatch = hit;
+            add("Apnar message e phrase dhore", hit, `"${String(sample).slice(0, 60)}"`);
+        }
+
+        // 5) cooldown
+        const cool = Number(conf.trigCooldownSec);
+        out.info.trigCooldownSec = isFinite(cool) ? cool : 15;
+        add("Cooldown 0 (chokhono thakte na)", (!isFinite(cool) || cool === 0),
+            isFinite(cool) ? cool + "s — ekhi user ekhi phrase " + cool + "s por por abar try korle skip hobe" : "default 15s");
+
+        // 6) bot identity + admin rights
+        const sender = await resolveChatBot(String(chatId), req.body.botId);
+        try {
+            const me = await sender.getMe();
+            out.info.botUsername = me.username ? "@" + me.username : "";
+            out.info.botId = String(me.id);
+        } catch (e) { out.info.botUsername = "pawa jay ni"; }
+        try {
+            const cm = await sender.getChatMember(String(chatId), (await sender.getMe()).id).catch(() => null);
+            const st = cm && cm.status ? cm.status : "unknown";
+            out.info.botStatus = st;
+            add("Bot group e ADMIN", st === "creator" || st === "administrator", "status=" + st);
+        } catch (e) {
+            out.info.botStatus = "check kora jay ni";
+            add("Bot group e ADMIN", false, "check kora jay ni");
+        }
+        try {
+            await sender.sendMessage(String(chatId), "🔎 <b>VS Protection diagnostic</b>\n✅ Bot group e message pathate PARCHE.", { parse_mode: "HTML", disable_web_page_preview: true });
+            out.info.canSend = true;
+            add("Bot group e message pathate pare", true, "");
+        } catch (e) {
+            out.info.canSend = false;
+            add("Bot group e message pathate pare", false, tlErrHint(e));
+        }
+
+        // 7) is the phrase registered as an ACTION command (needs admin)?
+        if (out.info.savedAction && out.info.savedAction !== "reply") {
+            out.info.needsAdmin = true;
+            add("Ei command action — shudhu ADMIN use korte parbe", true, "member hole action chole na");
+        }
+        out.info.hint = "Jodi phrase save ache, bot admin ache, kintu trigger fire hocche na — "
+            + "phir group e phrase likhe 15s por por try koro (cooldown), "
+            + "ba panel e 'Triggers' tab e gap (cooldown) 0 kore save koro.";
+        return res.json(out);
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
 app.get("/api/tg/version", (req, res) => {
     res.json({
         ok: true,
