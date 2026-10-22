@@ -274,3 +274,19 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Default/Automod message text — panel e dekhay + edit kora jay:** age panel e 5 ta message chilo (forward/video/inbox/link/button), ekhon **Automod er 5 ta message o add hoyeche** — All Caps, Emoji Spam, Duplicate Text, Chat Clearing (Newlines), Character Count. Shob message **Custom Auto-Replies** tab e dekhay o edit kora jay.
 - **⚠️ Firestore rules update lagbe:** notun `tg_user_notes` collection add hoyeche — **Firebase Console > vsprotection1 > Firestore > Rules** e `firestore.rules` er notun version **Publish** koro (na korle note save/load hobe na).
 - **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5** -> Firestore rules **Publish**.
+
+## AG. COMMANDS section — full command list + custom reply (2026-10-22)
+- **Panel e notun section: `⚡ Commands & Replies`** (left menu, oi group er sob command ek jaygay). Protita command card e dekhay:
+    • **Command name** (mono) + alias (`/removewarn`, `/lock` etc.)
+    • **Ki kaj kore** — plain Bangla description
+    • **Ki reply dey** (default text, exactly jeta bot pathay)
+    • **Je text boshano jay** — `{mention}` `{name}` `{id}` `{count}` `{limit}` `{reason}` `{duration}` `{groupId}` `{userId}` `{text}` `{code}` chips (click = copy)
+    • Scope chip (Group / Bot DM) + Admin only / Sob member + Target লাগে
+    • **📋 Copy** button (command text clipboard e copy)
+- **Custom reply:** protita command er niche textarea — admin nijei text likhe **Save** kore. Ekhon oi command **oi text-i reply dibe** (default chara). **Clear** button diye custom text remove kora jay.
+- **Mention thakle:** custom text e jodi user mention (`tg://user?id=` / `@username`) ba `{mention}` placeholder thake, bot sei target user ke tag kore reply dey. Matlab: `/off` er custom text e `Ei group ekhon off — admin @user ke bolben` likhe rakhle `/off` dile oi message-i jabe.
+- **12 ta command wired** (custom text apply hoy): `/warn` `/warns` `/unwarn` `/resetwarn` `/ban` `/unban` `/kick` `/mute` `/unmute` `/scammer` `/unscammer` `/off`+`/on`.
+- **22 ta command** registry te documented (group + DM sob) — jeta ekhono custom-text support nai (jemon `/bio`, `/panel`) segulo o dekha jay kaj kore.
+- **Search box** diye command filter kora jay. Custom text per-group store hoy (`tg_groups.cmdTexts`).
+- **API:** `GET /api/tg/commands?chatId=` (list + current custom) · `POST /api/tg/cmd-text` (chatId + cmd + text save).
+- **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5**.

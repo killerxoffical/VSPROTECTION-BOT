@@ -886,6 +886,44 @@ app.post("/api/tg/user-note", async (req, res) => {
         return res.status(500).json({ ok: false, error: e.message });
     }
 });
+// ── COMMAND LIST API — panel e Commands section er jonno ──
+app.get("/api/tg/commands", async (req, res) => {
+    try {
+        const chatId = (req.query && req.query.chatId) ? String(req.query.chatId) : "";
+        let custom = {};
+        if (chatId) {
+            try {
+                const gd = await db.collection("tg_groups").doc(chatId).get();
+                if (gd.exists) custom = (gd.data() || {}).cmdTexts || {};
+            } catch (e) {}
+        }
+        return res.json({ ok: true, commands: CMD_REGISTRY, custom: custom });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// ── Custom command reply text save (per group + command) ──
+app.post("/api/tg/cmd-text", async (req, res) => {
+    const { chatId, cmd, text } = req.body;
+    if (!chatId || !cmd) return res.status(400).json({ ok: false, error: "Group + command দিন" });
+    const key = cmdKeyOf(cmd);
+    if (!key) return res.status(400).json({ ok: false, error: "Command ঠিক না" });
+    try {
+        const gd = await db.collection("tg_groups").doc(String(chatId)).get();
+        const cur = gd.exists ? (gd.data() || {}) : {};
+        const map = Object.assign({}, cur.cmdTexts || {});
+        const val = String(text || "").trim().slice(0, 900);
+        if (val) map[key] = val;
+        else delete map[key];
+        await db.collection("tg_groups").doc(String(chatId)).set({ cmdTexts: map }, { merge: true });
+        groupConfigs.delete(String(chatId));
+        return res.json({ ok: true, message: val ? `Saved ✅ (${key})` : `Removed (${key})`, custom: map });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
 
 app.post("/api/tg/test-trigger", async (req, res) => {
     const { chatId, keyword, botId, kind } = req.body;
@@ -1179,6 +1217,185 @@ async function saveUserNote(chatId, userId, note, ownerUid) {
         }, { merge: true });
         return true;
     } catch (e) { return false; }
+}
+
+// ══════════════════════════════════════════════════════════════
+// COMMAND REGISTRY — every command the bot understands
+//   Panel e "Commands" section e full list dekhay:
+//     - ki kaj kore (desc)
+//     - ki reply dey (reply template)
+//     - {placeholders} je text bosha jay
+//     - admin custom text (per group) → override the reply
+//   Custom text e jodi user mention (tg://user?id= / @username) thake,
+//   sei text-i reply hisabe jabe (target user mention hoye).
+// ══════════════════════════════════════════════════════════════
+const CMD_REGISTRY = [
+    // ── Group moderation (admin only) ──
+    {
+        cmd: "/warn", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member-ke warn kore. Limit porjonto warn dile groupWarnAction (ban/mute/kick/warn) chole.",
+        reply: "⚠️ {mention} ওয়ার্ন ({count}/{limit}){reason}",
+        ph: ["{mention}", "{name}", "{id}", "{count}", "{limit}", "{reason}"]
+    },
+    {
+        cmd: "/warns", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member er koto warn ache — number dekhay.",
+        reply: "📋 {mention}-এর ওয়ার্ন: {count}",
+        ph: ["{mention}", "{name}", "{id}", "{count}"]
+    },
+    {
+        cmd: "/unwarn", alias: ["/removewarn"], scope: "group", admin: true, target: true,
+        desc: "Member er ekta warn komanor dey (1 kom).",
+        reply: "↩️ {mention}-এর ১টা ওয়ার্ন কমানো হলো — বাকি {count}",
+        ph: ["{mention}", "{name}", "{id}", "{count}"]
+    },
+    {
+        cmd: "/resetwarn", alias: ["/clearwarn"], scope: "group", admin: true, target: true,
+        desc: "Member er sob warn clear kore.",
+        reply: "🗑️ {mention}-এর সব ওয়ার্ন clear করা হলো!",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/ban", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member ke group theke ban kore. Bot ke Ban permission thakte hobe.",
+        reply: "🔨 {mention}-কে ব্যান করা হলো!",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/unban", alias: [], scope: "group", admin: true, target: true,
+        desc: "Ban kora member ke unb kore (ase group e dhuke parbe).",
+        reply: "✅ {mention}-কে আনব্যান করা হলো!",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/kick", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member ke unban kore — abar join korte parbe kintu dhukei thakte hobe.",
+        reply: "👢 {mention}-কে কিক করা হলো!",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/mute", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member ke mute kore. Time dite paren: 30 (min), 2h, 1d. Na dile 1 ghonta.",
+        reply: "🔇 {mention}-কে {duration} মিউট করা হলো!",
+        ph: ["{mention}", "{name}", "{id}", "{duration}"]
+    },
+    {
+        cmd: "/unmute", alias: [], scope: "group", admin: true, target: true,
+        desc: "Muted member ke abar message korar permission dey.",
+        reply: "🔊 {mention}-কে আনমিউট করা হলো!",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/bio", alias: ["/profile", "/userinfo"], scope: "group", admin: false, target: true,
+        desc: "User er full profile — warn, name change history, gali log, scammer, message count.",
+        reply: "👤 USER PROFILE …",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/scammer", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member ke scammer registry te add kore (reply diye use koren).",
+        reply: "🚨 {mention}-কে চিরতরে স্ক্যামার রেজিস্ট্রি করা হলো!",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/unscammer", alias: [], scope: "group", admin: true, target: true,
+        desc: "Member ke scammer list theke mukt kore.",
+        reply: "✅ {mention}-কে স্ক্যামার লিস্ট থেকে মুক্ত করা হলো।",
+        ph: ["{mention}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/off", alias: ["/lock", "/chatoff"], scope: "group", admin: true, target: false,
+        desc: "Group chat OFF kore — shudhu admin ra message dite parbe. Ar /on diye chalu.",
+        reply: "🔒 Group chat OFF!\n\nAdmin chat বন্ধ করেছে — এখন শুধু admin রা message দিতে পারবে।\n<i>(খুলতে: admin /on লিখুন)</i>",
+        ph: ["{name}", "{id}"]
+    },
+    {
+        cmd: "/on", alias: ["/unlock", "/chaton"], scope: "group", admin: true, target: false,
+        desc: "Group chat ON kore — sobai abar message dite parbe.",
+        reply: "🔓 Group chat ON!\n\nAdmin chat খুলে দিয়েছে — সবাই আবার message দিতে পারবে। 🎉",
+        ph: ["{name}", "{id}"]
+    },
+    {
+        cmd: "/id", alias: [], scope: "group", admin: false, target: false,
+        desc: "Group ID ar nijer user ID dekhay (sob member er jonno).",
+        reply: "🆔 Group ID: {groupId}\n👤 Your ID: {userId}",
+        ph: ["{groupId}", "{userId}", "{name}", "{id}"]
+    },
+    {
+        cmd: "/notice", alias: ["!notice"], scope: "group", admin: true, target: false,
+        desc: "Admin notice post kore ar pin kore. ! দিয়e o likha jay (!hello).",
+        reply: "👑 ADMIN NOTICE\n\n{text}",
+        ph: ["{text}", "{name}", "{id}"]
+    },
+    // ── Bot DM (private) ──
+    {
+        cmd: "/start", alias: ["/help"], scope: "dm", admin: false, target: false,
+        desc: "Bot ke /start — setup guide ar commands dekha jay.",
+        reply: "🛡️ VS Protection Bot চালু আছে!",
+        ph: []
+    },
+    {
+        cmd: "/link", alias: [], scope: "dm", admin: false, target: false,
+        desc: "Panel er Claim Code diye bot ke apnar panel account e link kore.",
+        reply: "✅ Connected!",
+        ph: ["{code}"]
+    },
+    {
+        cmd: "/unlink", alias: [], scope: "dm", admin: false, target: false,
+        desc: "Bot ke panel theke unlink kore.",
+        reply: "🚫 Unlinked!",
+        ph: []
+    },
+    {
+        cmd: "/panel", alias: [], scope: "dm", admin: false, target: false,
+        desc: "Bot er DM e full group setup menu — settings shob jaygay manage kora jay.",
+        reply: "📋 Group menu",
+        ph: []
+    },
+    {
+        cmd: "/cancel", alias: [], scope: "dm", admin: false, target: false,
+        desc: "Chalu thaka kono wizard / setup cancel kore.",
+        reply: "🚫 Cancelled!",
+        ph: []
+    },
+    {
+        cmd: "/claim", alias: [], scope: "group", admin: true, target: false,
+        desc: "Panel er Claim Code group e likhe group ke apnar panel account e link kore.",
+        reply: "✅ Group linked!",
+        ph: ["{code}"]
+    }
+];
+
+// cmd key normalize: "/removewarn" -> "/unwarn" (alias thakte)
+// groupConf.cmdTexts = { "/warn": "custom text", "/off": "..." }
+function cmdKeyOf(cmd) {
+    const c = String(cmd || "").toLowerCase().split("@")[0].trim();
+    const hit = CMD_REGISTRY.find((x) => x.cmd === c || (x.alias || []).includes(c));
+    return hit ? hit.cmd : c;
+}
+// Custom text for a command (per group) — admin override
+function cmdCustomText(conf, cmd) {
+    try {
+        const map = (conf && conf.cmdTexts) || {};
+        const k = cmdKeyOf(cmd);
+        const t = map[k] !== undefined ? map[k] : map[String(cmd || "").toLowerCase()];
+        return String(t || "").trim();
+    } catch (e) { return ""; }
+}
+// Placeholder replace — {mention} {name} {id} {count} {limit} {reason} {duration} {groupId} {userId} {text} {code}
+function fillCmdText(tpl, vars) {
+    let out = String(tpl || "");
+    const v = vars || {};
+    out = out.replace(/\{(\w+)\}/g, (m, k) => (v[k] !== undefined && v[k] !== null) ? String(v[k]) : m);
+    return out;
+}
+// Does a custom text contain a user mention? (tg://user?id= or @username)
+function cmdTextHasMention(tpl) {
+    const t = String(tpl || "");
+    if (/tg:\/\/user\?id=/i.test(t)) return true;
+    if (/<a\s+href="tg:\/\/user\?id=/i.test(t)) return true;
+    if (/@[A-Za-z0-9_]{3,}/.test(t)) return true;
+    return false;
 }
 
 function escH(t) { return String(t || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
@@ -2283,6 +2500,39 @@ async function getLinkedChatId(chatId) {
 // ---------------- 9. MASTER MESSAGE FILTER ----------------
 // Edit kore gali/link dhokano (edited-message bypass) বন্ধ — message + edited
 // message একই engine-এ চলে। Edit-এ flood count হয় না (notun message na)।
+// Custom command reply — admin panel e likha text use kore (default chara)
+// vars: { mention, name, id, count, limit, reason, duration, groupId, userId, text, code }
+// Jodi custom text e user mention thake -> sei text-i reply hoy (target mention kore).
+async function cmdReply(chatId, conf, cmdKey, vars, defHtml, extraOpts) {
+    const custom = cmdCustomText(conf, cmdKey);
+    const opts = Object.assign({ parse_mode: "HTML", disable_web_page_preview: true }, extraOpts || {});
+    if (custom) {
+        const filled = fillCmdText(custom, vars || {});
+        const hasMention = cmdTextHasMention(filled);
+        const hasHtml = /<[a-z/][^>]*>/i.test(filled);
+        const o = Object.assign({}, opts);
+        if (!hasHtml) delete o.parse_mode;
+        try {
+            await groupBot.sendMessage(chatId, filled, o);
+            return filled;
+        } catch (e) {
+            const plain = { disable_web_page_preview: true };
+            if (opts.reply_to_message_id) plain.reply_to_message_id = opts.reply_to_message_id;
+            try { await groupBot.sendMessage(chatId, filled.replace(/<[^>]*>/g, ""), plain); } catch (e2) {}
+            return filled;
+        }
+    }
+    if (defHtml) {
+        try { await groupBot.sendMessage(chatId, defHtml, opts); }
+        catch (e) {
+            const plain = { disable_web_page_preview: true };
+            if (opts.reply_to_message_id) plain.reply_to_message_id = opts.reply_to_message_id;
+            try { await groupBot.sendMessage(chatId, defHtml.replace(/<[^>]*>/g, ""), plain); } catch (e2) {}
+        }
+    }
+    return "";
+}
+
 async function onGroupUpdate(msg, isEdit) {
     try {
         if (!msg.chat) return;
@@ -2633,10 +2883,10 @@ async function onGroupUpdate(msg, isEdit) {
                     userId: targetId, name: targetName, username: targetUser.username ? `@${targetUser.username}` : "None",
                     isScammer: true, taggedBy: fromUser.id.toString(), taggedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                await groupBot.sendMessage(chatId, `🚨 <a href="tg://user?id=${targetId}">${targetName}</a>-কে চিরতরে <b>স্ক্যামার রেজিস্ট্রি করা হলো</b>!`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                await cmdReply(chatId, groupConf, "/scammer", { mention: `<a href="tg://user?id=${targetId}">${targetName}</a>`, name: targetName, id: targetId, groupId: chatId, userId: fromUser.id }, `🚨 <a href="tg://user?id=${targetId}">${targetName}</a>-কে চিরতরে <b>স্ক্যামার রেজিস্ট্রি করা হলো</b>!`, { reply_to_message_id: msgId });
             } else {
                 await db.collection("tg_scammers").doc(targetId).delete();
-                await groupBot.sendMessage(chatId, `✅ <a href="tg://user?id=${targetId}">${targetName}</a>-কে স্ক্যামার লিস্ট থেকে মুক্ত করা হলো।`, { parse_mode: "HTML", reply_to_message_id: msgId });
+                await cmdReply(chatId, groupConf, "/unscammer", { mention: `<a href="tg://user?id=${targetId}">${targetName}</a>`, name: targetName, id: targetId, groupId: chatId, userId: fromUser.id }, `✅ <a href="tg://user?id=${targetId}">${targetName}</a>-কে স্ক্যামার লিস্ট থেকে মুক্ত করা হলো।`, { reply_to_message_id: msgId });
             }
             return;
         }
@@ -2731,14 +2981,14 @@ async function onGroupUpdate(msg, isEdit) {
             }
             if (isCommand(text, "/ban")) {
                 const ok = await groupBot.banChatMember(chatId, tgt.id).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
-                await groupBot.sendMessage(chatId, ok ? `🔨 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>ব্যান</b> করা হলো!` : `❌ ব্যান করা যায়নি — bot কে <b>Admin</b> (Ban permission) বানানো আছে কিনা দেখো।`, { parse_mode: "HTML" }).catch(() => {});
+await cmdReply(chatId, groupConf, "/ban", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, groupId: chatId, userId: fromUser.id }, ok ? `🔨 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>ব্যান</b> করা হলো!` : `❌ ব্যান করা যায়নি — bot কে <b>Admin</b> (Ban permission) বানানো আছে কিনা দেখো।`);
             } else if (isCommand(text, "/unban")) {
                 const ok = await groupBot.unbanChatMember(chatId, tgt.id, { only_if_banned: true }).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
-                await groupBot.sendMessage(chatId, ok ? `✅ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>আনব্যান</b> করা হলো!` : `❌ আনব্যান করা যায়নি — bot permission দেখো।`, { parse_mode: "HTML" }).catch(() => {});
+await cmdReply(chatId, groupConf, "/unban", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, groupId: chatId, userId: fromUser.id }, ok ? `✅ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>আনব্যান</b> করা হলো!` : `❌ আনব্যান করা যায়নি — bot permission দেখো।`);
             } else if (isCommand(text, "/kick")) {
                 const ok = await groupBot.banChatMember(chatId, tgt.id).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
                 if (ok) await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
-                await groupBot.sendMessage(chatId, ok ? `👢 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>কিক</b> করা হলো!` : `❌ কিক করা যায়নি — bot কে <b>Admin</b> (Ban permission) বানানো আছে কিনা দেখো।`, { parse_mode: "HTML" }).catch(() => {});
+await cmdReply(chatId, groupConf, "/kick", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, groupId: chatId, userId: fromUser.id }, ok ? `👢 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>কিক</b> করা হলো!` : `❌ কিক করা যায়নি — bot কে <b>Admin</b> (Ban permission) বানানো আছে কিনা দেখো।`);
             } else if (isCommand(text, "/mute")) {
                 // Duration: plain minute (30) ba 30m / 2h / 1d — target ID token skip হয়
                 let mins = 60;
@@ -2760,12 +3010,12 @@ async function onGroupUpdate(msg, isEdit) {
                     until_date: Math.floor(Date.now() / 1000) + mins * 60
                 }).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
                 const durTxt = mins % 1440 === 0 ? `${mins / 1440} দিন` : mins % 60 === 0 ? `${mins / 60} ঘণ্টা` : `${mins} মিনিট`;
-                await groupBot.sendMessage(chatId, ok ? `🔇 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>${durTxt} মিউট</b> করা হলো!` : `❌ মিউট করা যায়নি — bot কে <b>Admin</b> (Restrict permission) বানানো আছে কিনা দেখো।`, { parse_mode: "HTML" }).catch(() => {});
+await cmdReply(chatId, groupConf, "/mute", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, duration: durTxt, groupId: chatId, userId: fromUser.id }, ok ? `🔇 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>${durTxt} মিউট</b> করা হলো!` : `❌ মিউট করা যায়নি — bot কে <b>Admin</b> (Restrict permission) বানানো আছে কিনা দেখো।`);
             } else if (isCommand(text, "/unmute")) {
                 const ok = await groupBot.restrictChatMember(chatId, tgt.id, {
                     permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true }
                 }).then(() => true).catch((e) => { hintNoRights(chatId, e); return false; });
-                await groupBot.sendMessage(chatId, ok ? `🔊 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>আনমিউট</b> করা হলো!` : `❌ আনমিউট করা যায়নি — bot permission দেখো।`, { parse_mode: "HTML" }).catch(() => {});
+await cmdReply(chatId, groupConf, "/unmute", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, groupId: chatId, userId: fromUser.id }, ok ? `🔊 <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-কে <b>আনমিউট</b> করা হলো!` : `❌ আনমিউট করা যায়নি — bot permission দেখো।`);
             } else if (isCommand(text, "/warn")) {
                 const wOwner = await getFreshOwner(chatId, groupConf);
                 const n = (await getWarnCount(chatId, tgt.id)) + 1;
@@ -2778,7 +3028,7 @@ async function onGroupUpdate(msg, isEdit) {
                     if (d && d === String(tgt.id) && d.length >= 5) return false;
                     return true;
                 }).join(" ").slice(0, 120);
-                await groupBot.sendMessage(chatId, `⚠️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a> ওয়ার্ন <b>(${n}/${limit})</b>${rsn ? ` — <i>${cleanName(rsn)}</i>` : ""}`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+await cmdReply(chatId, groupConf, "/warn", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, count: n, limit: limit, reason: rsn ? cleanName(rsn) : "", groupId: chatId, userId: fromUser.id }, `⚠️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a> ওয়ার্ন <b>(${n}/${limit})</b>${rsn ? ` — <i>${cleanName(rsn)}</i>` : ""}`, { reply_to_message_id: msgId });
                 if (n >= limit) {
                     const action = groupConf.warnAction || "ban";
                     if (action === "mute") {
@@ -2802,11 +3052,11 @@ async function onGroupUpdate(msg, isEdit) {
                     const left = cur - 1;
                     if (left <= 0) await clearWarn(chatId, tgt.id);
                     else await setWarnCount(chatId, tgt.id, left, await getFreshOwner(chatId, groupConf));
-                    await groupBot.sendMessage(chatId, `↩️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর ১টা ওয়ার্ন কমানো হলো — বাকি <b>${Math.max(0, left)}</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+await cmdReply(chatId, groupConf, "/unwarn", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, count: Math.max(0, left), groupId: chatId, userId: fromUser.id }, `↩️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর ১টা ওয়ার্ন কমানো হলো — বাকি <b>${Math.max(0, left)}</b>`, { reply_to_message_id: msgId });
                 }
             } else if (isCommand(text, "/resetwarn") || isCommand(text, "/clearwarn")) {
                 await clearWarn(chatId, tgt.id);
-                await groupBot.sendMessage(chatId, `🗑️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর সব ওয়ার্ন <b>clear</b> করা হলো!`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+await cmdReply(chatId, groupConf, "/resetwarn", { mention: `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`, name: cleanName(tgt.name), id: tgt.id, groupId: chatId, userId: fromUser.id }, `🗑️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর সব ওয়ার্ন <b>clear</b> করা হলো!`, { reply_to_message_id: msgId });
             } else if (bioCmd) {
                 // 👤 USER BIO — full profile (warns, name-change history, gali log, scammer, note)
                 const bid = (tgt && tgt.id) ? String(tgt.id) : String(fromUser.id);
@@ -2826,7 +3076,7 @@ async function onGroupUpdate(msg, isEdit) {
                 const qid = tgt ? tgt.id : fromUser.id.toString();
                 const qn = tgt ? tgt.name : currentName;
                 const c = await getWarnCount(chatId, qid);
-                await groupBot.sendMessage(chatId, `📋 <a href="tg://user?id=${qid}">${cleanName(qn)}</a>-এর ওয়ার্ন: <b>${c}</b>`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+await cmdReply(chatId, groupConf, "/warns", { mention: `<a href="tg://user?id=${qid}">${cleanName(qn)}</a>`, name: cleanName(qn), id: qid, count: c, groupId: chatId, userId: fromUser.id }, `📋 <a href="tg://user?id=${qid}">${cleanName(qn)}</a>-এর ওয়ার্ন: <b>${c}</b>`, { reply_to_message_id: msgId });
             }
             return;
         }
@@ -2865,11 +3115,10 @@ async function onGroupUpdate(msg, isEdit) {
                     }).catch((e) => { hintNoRights(chatId, e); });
                 }
             } catch (e) {}
-            await groupBot.sendMessage(chatId,
+            await cmdReply(chatId, groupConf, wantLock ? "/off" : "/on", { name: cleanName(currentName), id: userId, groupId: chatId, userId: fromUser.id },
                 wantLock
                     ? `🔒 <b>Group chat OFF!</b>\n\nAdmin chat বন্ধ করেছে — এখন শুধু admin রা message দিতে পারবে।\n<i>(খুলতে: admin /on লিখুন)</i>`
-                    : `🔓 <b>Group chat ON!</b>\n\nAdmin chat খুলে দিয়েছে — সবাই আবার message দিতে পারবে। 🎉`,
-                { parse_mode: "HTML" }).catch(() => {});
+                    : `🔓 <b>Group chat ON!</b>\n\nAdmin chat খুলে দিয়েছে — সবাই আবার message দিতে পারবে। 🎉`);
             return;
         }
 
