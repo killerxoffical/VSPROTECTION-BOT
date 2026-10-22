@@ -409,3 +409,14 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Panel e oi command er `Ki reply dey` box e** notun shundor message dekhabe (registry theke ase).
 - **Test:** 8 runtime (asol onGroupUpdate chaliye) + 16 message check — shob pass.
 - **Korte hobe:** GitHub push → Render redeploy → panel Ctrl+F5.
+
+## AP. Fix: Commands section e panel crash korchilo (2026-10-22)
+- **Report:** Commands section e gele **panel crash** korchilo (page blank / freeze).
+- **Asol karan:** `renderCmdList()` er bhitore ekta line chilo — `try { renderCmdList(); } catch (e) {}` — mane **function nijei nijeke call korchilo** → **infinite recursion → stack overflow** → browser crash. (Oita jani custom-command list remove korte gele eshob-to leftover chilo.)
+- **Fix:** oi line puro remove. Ekhon `renderCmdList()` → `loadCmdList()` (server theke list) → render — loop nai.
+- **Bonus:** duplicate `loadCmdList()` call o remove (ekbar e load hoy).
+- **Test:**
+    • **Recursion detector** (acorn-based, direct self-call scan) — puro panel e 0 self-recursion
+    • **Commands DOM test** — `renderCmdList()` 3 ta command render kore (4900 char HTML), desc/placeholder chip/custom reply/Test/Copy/Save sob present, 2nd render eo 1 call (no recursion)
+    • **Panel smoke test (14/14)** — renderPhGuide, renderCmdList, renderTrigs, renderAdminTrigs, selectFeat('commands'), placeholder guide (10 card), trigger list, admin trigger list — sob chalu ache
+- **Korte hobe:** GitHub push → Render redeploy → panel **Ctrl+F5** (purono cached JS clear hobe).
