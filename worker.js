@@ -2727,6 +2727,10 @@ async function onGroupUpdate(msg, isEdit) {
             return;
         }
 
+        // Admin check — trigger block age-i (custom command action e isAdmin lage, tai
+        // ekhane-i compute hoy — pore hole TDZ ReferenceError hoto)
+        const isAdmin = await isGroupAdmin(chatId, fromUser, msg, groupBot);
+
         if (groupConf && groupConf.triggers && groupConf.triggers.length > 0 && text) {
             const cleanUserText = text.toLowerCase().trim();
             const trigCoolSec = cfgNum(groupConf, "trigCooldownSec", 15, 0, 300);
@@ -2911,7 +2915,6 @@ async function onGroupUpdate(msg, isEdit) {
             return;
         }
 
-        const isAdmin = await isGroupAdmin(chatId, fromUser, msg, groupBot);
 
         // Admin ID auto-collect (live/gali DM যাবে) — 24h te 1 bar write + hello DM
         if (isAdmin && fromUser && !isAnonymousAdmin && !fromUser.is_bot) {

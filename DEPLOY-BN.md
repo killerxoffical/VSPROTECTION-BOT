@@ -320,3 +320,11 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - Built-in command card er placeholder chip gulo o ekhon **clickable** + hover e tooltip (ki dey) dekhay.
 - Worker protita documented placeholder **actually provide kore** (10/10 verified) — likhe fele kono blank ba `{count}` chara raw placeholder baki thake na.
 - **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5**.
+
+## AI. Custom command reply nei — TDZ bug fix (2026-10-22)
+- **Report:** `"warn dewa uchit"` custom command set kore group e reply diye likhchi, kintu **bot kono reply dey na**.
+- **Asol karon:** trigger block e `isAdmin` use hoy (action command er admin check), kintu `const isAdmin = await isGroupAdmin(...)` **tar por** declare chilo (line ~2914) — trigger block line ~2734-e. JS e `const`/`let` **TDZ (Temporal Dead Zone)**-te thake, tai use korar somoy `ReferenceError: Cannot access 'isAdmin' before initialization` throw hoy → **puro `onGroupUpdate` crash** → outer catch e chole → **kono reply-i jay na**.
+    - Eta keno shudhu action command e dhokto: `isAdmin` shudhu `trigAction !== "reply"` branch e use hoy. Tai shudhu-text reply trigger chilo (oita kaj korto), kintu **warn/ban/mute action trigger chup chup fail korto**.
+- **Fix:** `const isAdmin = await isGroupAdmin(...)` — trigger block er **age** (line 2732) compute kora hoy. Ekhon action trigger o chole.
+- **Extra:** runtime test likha hoye **asol `onGroupUpdate` function ta chaliye** verify kora hoy (13/13 pass) — custom command + action, plain reply trigger, non-admin notice, target hint, placeholder fill, ar lamba sentence e phrase match — shob tested.
+- **Korte hobe:** GitHub push -> Render redeploy.
