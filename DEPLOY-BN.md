@@ -262,3 +262,15 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Panel eo Profile button:** Members list + Warns list e **Profile** button → full profile modal (name, warn, name history, gali log, scammer).
 - **API:** `POST /api/tg/user-bio` (chatId + userId) → full profile HTML + JSON data.
 - **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5** hard refresh.
+
+## AF. Bio profile — branding + mention + copy + admin note (2026-10-22)
+- **Footer shundor kora:** profile er niche ekhon `⚡ Powered by Vareon Studio` — age `Admin only — data ei group er member der jonno` chilo, ekhon **"Admin only" ei text nai**. Profile body-r kono jaygay o "admin only" lekha nai.
+- **Mention clickable:** Name ar Username ekhon **clickable mention** (`tg://user?id=...`) — tap korle direct oi user er profile. Username na thakle `-` dekhay (kono khali link nai).
+- **👑 Admin badge:** target user jodi group er admin/creator hoy, profile e `👑 Admin` dekhay — regular member e dekhay na.
+- **📋 Copy option (2 vabe):**
+    • **Bot e:** profile message-er niche **📋 Copy profile** button — click korle plain text (mention-free, HTML chara) `<pre>` block e dey, jeta directly copy kora jay.
+    • **Panel e:** profile modal e **📋 Copy Profile** button — clipboard e copy hoy (fallback: textarea select+execCommand).
+- **Admin note (view + edit):** profile modal e **Admin note** box — admin nijei note likhe save korte pare (per group + per user, `tg_user_notes` collection e jay). Note profile e dekhay, sudhu admin dekhay. **API:** `POST /api/tg/user-note`.
+- **Default/Automod message text — panel e dekhay + edit kora jay:** age panel e 5 ta message chilo (forward/video/inbox/link/button), ekhon **Automod er 5 ta message o add hoyeche** — All Caps, Emoji Spam, Duplicate Text, Chat Clearing (Newlines), Character Count. Shob message **Custom Auto-Replies** tab e dekhay o edit kora jay.
+- **⚠️ Firestore rules update lagbe:** notun `tg_user_notes` collection add hoyeche — **Firebase Console > vsprotection1 > Firestore > Rules** e `firestore.rules` er notun version **Publish** koro (na korle note save/load hobe na).
+- **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5** -> Firestore rules **Publish**.

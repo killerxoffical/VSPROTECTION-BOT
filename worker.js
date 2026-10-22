@@ -853,19 +853,35 @@ app.post("/api/tg/user-bio", async (req, res) => {
     const { chatId, userId, name, username } = req.body;
     if (!chatId || !userId) return res.status(400).json({ ok: false, error: "Group + user ID দিন" });
     try {
-        const p = await buildUserProfile(String(chatId), String(userId), name || "", username || "");
+        const p = await buildUserProfile(String(chatId), String(userId), name || "", username || "", groupBot);
         if (!p.found) return res.status(404).json({ ok: false, error: "User data পাওয়া যায়নি" });
         return res.json({
             ok: true,
             html: p.html,
+            text: p.text,
             warnCount: p.warnCount,
             msgCount: p.msgCount,
             name: p.name,
             username: p.username,
             scammer: p.scammer,
             galiCount: p.galiCount,
-            prevNames: p.prevNames
+            prevNames: p.prevNames,
+            isAdmin: p.isAdmin,
+            note: p.note
         });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
+// Admin note save (per group + user) — panel theke edit hoy
+app.post("/api/tg/user-note", async (req, res) => {
+    const { chatId, userId, note, ownerUid } = req.body;
+    if (!chatId || !userId) return res.status(400).json({ ok: false, error: "Group + user ID দিন" });
+    try {
+        const okSave = await saveUserNote(String(chatId), String(userId), note || "", ownerUid || "");
+        if (!okSave) return res.status(500).json({ ok: false, error: "Note save হয়নি" });
+        return res.json({ ok: true, message: "Note save হয়েছে ✅" });
     } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
     }
@@ -928,6 +944,13 @@ function fmtLeft(ms) {
 //   Shows: warns, name-change history (old name + when), scammer,
 //          msg count, join info, and all recorded gali incidents.
 // ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// USER PROFILE (bio) — full data for a user
+//   /bio  |  /bio @user  |  /bio <id>  |  reply to a message + bio
+//   Shows: warns, name-change history (old name + when), scammer,
+//          msg count, join info, and all recorded gali incidents.
+//   Note: admin can attach a private NOTE per user (view + edit).
+// ══════════════════════════════════════════════════════════════
 function fmtWhen(ts) {
     try {
         if (!ts) return "-";
@@ -959,11 +982,11 @@ function fmtAgo(ts) {
 }
 function escBio(t) { return String(t == null ? "" : t).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
 
-// Full profile builder — returns { html, found }
-async function buildUserProfile(chatId, userId, fallbackName, fallbackUsername) {
+// Full profile builder — returns { html, text, found, ... }
+// html = Telegram-ready (mentions clickable), text = plain (copy button)
+async function buildUserProfile(chatId, userId, fallbackName, fallbackUsername, botInst) {
     const uid = String(userId || "").trim();
-    if (!/^\d{5,}$/.test(uid)) return { html: "", found: false };
-    const out = [];
+    if (!/^\d{5,}$/.test(uid)) return { html: "", text: "", found: false };
     let name = fallbackName || "";
     let username = fallbackUsername || "";
     let warnCount = 0;
@@ -975,6 +998,8 @@ async function buildUserProfile(chatId, userId, fallbackName, fallbackUsername) 
     let prevNames = [];
     let galiCount = 0;
     let galiRows = [];
+    let note = "";
+    let isAdmin = false;
 
     // 1) member record (tg_members)
     try {
@@ -1020,31 +1045,64 @@ async function buildUserProfile(chatId, userId, fallbackName, fallbackUsername) 
             galiCount = galiRows.length;
         }
     } catch (e) {}
+    // 6) admin note (owner likheche)
+    try {
+        const n = await db.collection("tg_user_notes").doc(`${chatId}_${uid}`).get();
+        if (n.exists) note = String((n.data() || {}).note || "");
+    } catch (e) {}
+    // 7) ki seta group admin?
+    try {
+        const api = botInst || groupBot;
+        const cm = await api.getChatMember(chatId, uid).catch(() => null);
+        if (cm && (cm.status === "creator" || cm.status === "administrator")) isAdmin = true;
+    } catch (e) {}
 
+    const uname = username && username !== "None" ? String(username).replace(/^@/, "") : "";
+    // clickable mention (telegram) + plain (@username)
     const mention = `<a href="tg://user?id=${uid}">${escBio(name || uid)}</a>`;
-    const unTxt = username && username !== "None" ? "@" + String(username).replace(/^@/, "") : "-";
+    const unHtml = uname ? `<a href="tg://user?id=${uid}">@${escBio(uname)}</a>` : "-";
+    const unTxt = uname ? "@" + uname : "-";
+    const adminBadge = isAdmin ? " 👑 <b>Admin</b>" : "";
 
-    out.push(`👤 <b>USER PROFILE</b>`);
-    out.push(`━━━━━━━━━━━━━━━━━━`);
-    out.push(`👤 <b>Name:</b> ${mention}`);
-    out.push(`🔖 <b>Username:</b> ${escBio(unTxt)}`);
-    out.push(`🆔 <b>ID:</b> <code>${uid}</code>`);
-    out.push(`━━━━━━━━━━━━━━━━━━`);
-    out.push(`⚠️ <b>Warns:</b> <code>${warnCount}</code>${warnCount > 0 ? " 🔴" : " 🟢"}`);
-    out.push(`💬 <b>Messages:</b> <code>${msgCount}</code>`);
+    const H = [];   // html lines
+    const T = [];   // plain text lines
+
+    H.push(`👤 <b>USER PROFILE</b>`);
+    T.push("USER PROFILE");
+    H.push(`━━━━━━━━━━━━━━━━━━`);
+    T.push("------------------");
+    H.push(`👤 <b>Name:</b> ${mention}${adminBadge}`);
+    T.push(`Name: ${name || uid}${isAdmin ? " [Admin]" : ""}`);
+    H.push(`🔖 <b>Username:</b> ${unHtml}`);
+    T.push(`Username: ${unTxt}`);
+    H.push(`🆔 <b>ID:</b> <code>${uid}</code>`);
+    T.push(`ID: ${uid}`);
+    H.push(`━━━━━━━━━━━━━━━━━━`);
+    T.push("------------------");
+    H.push(`⚠️ <b>Warns:</b> <code>${warnCount}</code>${warnCount > 0 ? " 🔴" : " 🟢"}`);
+    T.push(`Warns: ${warnCount}${warnCount > 0 ? " (red)" : ""}`);
+    H.push(`💬 <b>Messages:</b> <code>${msgCount}</code>`);
+    T.push(`Messages: ${msgCount}`);
     if (scammer) {
-        out.push(`🚨 <b>Scammer:</b> 🔴 YES${scammerBy ? ` (tagged by <code>${escBio(scammerBy)}</code>)` : ""}`);
+        H.push(`🚨 <b>Scammer:</b> 🔴 YES${scammerBy ? ` (tagged by <code>${escBio(scammerBy)}</code>)` : ""}`);
+        T.push(`Scammer: YES${scammerBy ? ` (by ${scammerBy})` : ""}`);
     } else {
-        out.push(`✅ <b>Scammer:</b> Not listed`);
+        H.push(`✅ <b>Scammer:</b> Not listed`);
+        T.push(`Scammer: Not listed`);
     }
-    out.push(`🕐 <b>Last seen:</b> ${escBio(fmtAgo(lastSeen))}`);
-    out.push(`📅 <b>First seen:</b> ${escBio(fmtWhen(firstSeen))}`);
+    H.push(`🕐 <b>Last seen:</b> ${escBio(fmtAgo(lastSeen))}`);
+    T.push(`Last seen: ${fmtAgo(lastSeen)}`);
+    H.push(`📅 <b>First seen:</b> ${escBio(fmtWhen(firstSeen))}`);
+    T.push(`First seen: ${fmtWhen(firstSeen)}`);
 
     // name change history
-    out.push(`━━━━━━━━━━━━━━━━━━`);
-    out.push(`🔄 <b>Name change history</b> (${prevNames.length})`);
+    H.push(`━━━━━━━━━━━━━━━━━━`);
+    T.push("------------------");
+    H.push(`🔄 <b>Name change history</b> (${prevNames.length})`);
+    T.push(`Name change history (${prevNames.length})`);
     if (!prevNames.length) {
-        out.push(`   <i>Kono name change record nai — name sofar stable.</i>`);
+        H.push(`   <i>Kono name change record nai — name sofar stable.</i>`);
+        T.push(`   Kono name change record nai — name sofar stable.`);
     } else {
         const sorted = prevNames.slice().sort((a, b) => {
             const ta = (a && a.at) ? (a.at.toMillis ? a.at.toMillis() : (a.at.seconds || 0) * 1000) : 0;
@@ -1054,29 +1112,73 @@ async function buildUserProfile(chatId, userId, fallbackName, fallbackUsername) 
         sorted.slice(0, 10).forEach((p, i) => {
             const pn = escBio(p.name || "-");
             const pu = (p.username && p.username !== "None") ? "@" + String(p.username).replace(/^@/, "") : "-";
-            out.push(`   ${i + 1}. <b>${pn}</b> ${escBio(pu)} — <i>${escBio(fmtWhen(p.at))}</i>`);
+            H.push(`   ${i + 1}. <b>${pn}</b> ${escBio(pu)} — <i>${escBio(fmtWhen(p.at))}</i>`);
+            T.push(`   ${i + 1}. ${p.name || "-"} ${pu} — ${fmtWhen(p.at)}`);
         });
-        if (sorted.length > 10) out.push(`   <i>… ar ${sorted.length - 10} ta arocche</i>`);
+        if (sorted.length > 10) {
+            H.push(`   <i>… ar ${sorted.length - 10} ta arocche</i>`);
+            T.push(`   ... ar ${sorted.length - 10} ta arocche`);
+        }
     }
 
     // gali incidents
-    out.push(`━━━━━━━━━━━━━━━━━━`);
-    out.push(`📋 <b>Gali log</b> (${galiCount}${galiCount >= 20 ? "+" : ""})`);
+    H.push(`━━━━━━━━━━━━━━━━━━`);
+    T.push("------------------");
+    H.push(`📋 <b>Gali log</b> (${galiCount}${galiCount >= 20 ? "+" : ""})`);
+    T.push(`Gali log (${galiCount}${galiCount >= 20 ? "+" : ""})`);
     if (!galiCount) {
-        out.push(`   <i>Kono gali record nai.</i>`);
+        H.push(`   <i>Kono gali record nai.</i>`);
+        T.push(`   Kono gali record nai.`);
     } else {
         galiRows.slice(0, 6).forEach((g) => {
             const when = escBio(fmtAgo(g.createdAt));
             const matched = g.matched ? `<code>${escBio(g.matched)}</code>` : "-";
             const txt = escBio(String(g.text || "").slice(0, 90));
-            out.push(`   • <i>${txt}</i> — ${matched} <i>(${when})</i>`);
+            H.push(`   • <i>${txt}</i> — ${matched} <i>(${when})</i>`);
+            T.push(`   - ${String(g.text || "").slice(0, 90)} — ${g.matched || "-"} (${fmtAgo(g.createdAt)})`);
         });
-        if (galiCount > 6) out.push(`   <i>… ar ${galiCount - 6} ta arocche</i>`);
+        if (galiCount > 6) {
+            H.push(`   <i>… ar ${galiCount - 6} ta arocche</i>`);
+            T.push(`   ... ar ${galiCount - 6} ta arocche`);
+        }
     }
-    out.push(`━━━━━━━━━━━━━━━━━━`);
-    out.push(`<i>Admin only — data ei group er member der jonno.</i>`);
 
-    return { html: out.join("\n"), found: true, warnCount, msgCount, name, username, scammer, galiCount, prevNames: prevNames.length };
+    // admin note (view + edit)
+    if (note) {
+        H.push(`━━━━━━━━━━━━━━━━━━`);
+        T.push("------------------");
+        H.push(`📝 <b>Admin note:</b>`);
+        T.push(`Admin note:`);
+        H.push(`   ${escBio(note.slice(0, 400))}`);
+        T.push(`   ${String(note).slice(0, 400)}`);
+    }
+
+    // beautiful branded footer (no "admin only" text)
+    H.push(`━━━━━━━━━━━━━━━━━━`);
+    T.push("------------------");
+    H.push(`<i>⚡ Powered by Vareon Studio</i>`);
+    T.push(`Powered by Vareon Studio`);
+
+    return {
+        html: H.join("\n"),
+        text: T.join("\n"),
+        found: true,
+        warnCount, msgCount, name, username: uname, scammer, galiCount,
+        prevNames: prevNames.length, isAdmin, note
+    };
+}
+
+// Admin note save (per group + user) — panel theke edit hoy
+async function saveUserNote(chatId, userId, note, ownerUid) {
+    try {
+        await db.collection("tg_user_notes").doc(`${chatId}_${userId}`).set({
+            chatId: String(chatId), userId: String(userId),
+            note: String(note || "").slice(0, 500),
+            ownerUid: ownerUid || "",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        return true;
+    } catch (e) { return false; }
 }
 
 function escH(t) { return String(t || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
@@ -2706,15 +2808,17 @@ async function onGroupUpdate(msg, isEdit) {
                 await clearWarn(chatId, tgt.id);
                 await groupBot.sendMessage(chatId, `🗑️ <a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>-এর সব ওয়ার্ন <b>clear</b> করা হলো!`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
             } else if (bioCmd) {
-                // 👤 USER BIO — full profile (warns, name-change history, gali log, scammer)
+                // 👤 USER BIO — full profile (warns, name-change history, gali log, scammer, note)
                 const bid = (tgt && tgt.id) ? String(tgt.id) : String(fromUser.id);
                 const bname = (tgt && tgt.name) ? tgt.name : currentName;
                 const buname = (tgt && tgt.name) ? "" : currentUsername;
-                const p = await buildUserProfile(chatId, bid, bname, buname);
+                const p = await buildUserProfile(chatId, bid, bname, buname, groupBot);
                 if (!p.found) {
                     await groupBot.sendMessage(chatId, `❌ <b>${cleanName(bname)}</b> (${bid}) er kono data paya jay ni — member list e nai.`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
                 } else {
-                    await groupBot.sendMessage(chatId, p.html, { parse_mode: "HTML", reply_to_message_id: msgId, disable_web_page_preview: true }).catch(async () => {
+                    // Copy button — plain text (mention-free) ekta copy kora jay
+                    const copyKb = { inline_keyboard: [[{ text: "📋 Copy profile", callback_data: `bio_copy:${chatId}:${bid}` }]] };
+                    await groupBot.sendMessage(chatId, p.html, { parse_mode: "HTML", reply_to_message_id: msgId, disable_web_page_preview: true, reply_markup: copyKb }).catch(async () => {
                         await groupBot.sendMessage(chatId, p.html.replace(/<[^>]*>/g, ""), { reply_to_message_id: msgId }).catch(() => {});
                     });
                 }
@@ -3199,6 +3303,26 @@ groupBot.on("callback_query", async (query) => {
 
         if (data === "wp_back" || data.startsWith("wp_")) {
             await wizCallback(groupBot, query);
+            return;
+        }
+        if (data.startsWith("bio_copy:")) {
+            const parts2 = data.split(":");
+            const tChat = parts2[1] || "";
+            const tUser = parts2[2] || "";
+            try {
+                const bp = await buildUserProfile(tChat, tUser, "", "", groupBot);
+                if (!bp.found) {
+                    await groupBot.answerCallbackQuery(query.id, { text: "Data paoa jay ni", show_alert: true });
+                    return;
+                }
+                await groupBot.answerCallbackQuery(query.id, { text: "✅ Copy hoye gelo!", show_alert: false });
+                await groupBot.sendMessage(chatId, "<b>📋 Copy-able profile</b>\n<pre>" + escBio(bp.text) + "</pre>",
+                    { parse_mode: "HTML", disable_web_page_preview: true }).catch(async () => {
+                    await groupBot.sendMessage(chatId, bp.text, { disable_web_page_preview: true }).catch(() => {});
+                });
+            } catch (e) {
+                await groupBot.answerCallbackQuery(query.id, { text: "Error", show_alert: true }).catch(() => {});
+            }
             return;
         }
         if (data.startsWith("giveaway_join:")) {
