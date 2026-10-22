@@ -1229,6 +1229,131 @@ async function saveUserNote(chatId, userId, note, ownerUid) {
 //   Custom text e jodi user mention (tg://user?id= / @username) thake,
 //   sei text-i reply hisabe jabe (target user mention hoye).
 // ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// CUSTOM COMMAND — admin nije natural Bangla phrase likhe BOLE
+//   Example: phrase = "warn dewa uchit"
+//            action = warn, reply = "ore warn daw"
+//   Admin group e likhe + user ke mention korle bot sei user ke warn kore.
+// ══════════════════════════════════════════════════════════════
+const CMD_ACTIONS = ["reply", "warn", "ban", "kick", "mute", "unwarn", "resetwarn"];
+const CMD_ACTION_LABEL = {
+    reply: "Reply only (shudhu text)",
+    warn: "⚠️ Warn dewa",
+    ban: "🔨 Ban kora",
+    kick: "👢 Kick kora",
+    mute: "🔇 Mute kora",
+    unwarn: "↩️ 1ta warn komanor dewa",
+    resetwarn: "🗑️ Sob warn clear"
+};
+
+// Target resolver — reply / tap-mention / @username / numeric ID
+async function resolveCmdTarget(chatId, msg, text) {
+    try {
+        if (msg && msg.reply_to_message && msg.reply_to_message.from) {
+            const tu = msg.reply_to_message.from;
+            return { id: tu.id.toString(), name: `${tu.first_name || ""} ${tu.last_name || ""}`.trim() || tu.id.toString() };
+        }
+        try {
+            const ents = (msg && (msg.entities || msg.caption_entities)) || [];
+            for (const e of ents) {
+                if (e && e.type === "text_mention" && e.user && e.user.id) {
+                    const tu = e.user;
+                    return { id: String(tu.id), name: `${tu.first_name || ""} ${tu.last_name || ""}`.trim() || String(tu.id) };
+                }
+            }
+        } catch (e) {}
+        try {
+            const m = (text || "").match(/@([A-Za-z0-9_]{3,})/);
+            if (m) {
+                const un = m[1].toLowerCase();
+                const snap = await db.collection("tg_members").where("chatId", "==", chatId).limit(200).get().catch(() => null);
+                if (snap) {
+                    let found = null;
+                    snap.forEach((d) => {
+                        if (found) return;
+                        const v = d.data() || {};
+                        const vu = String(v.username || "").toLowerCase().replace(/^@/, "");
+                        if (vu === un && v.userId) found = { id: String(v.userId), name: v.name || ("@" + m[1]) };
+                    });
+                    if (found && /^\d{5,}$/.test(found.id)) return found;
+                }
+                return { id: "", name: "@" + m[1], notFound: true };
+            }
+        } catch (e) {}
+        const parts = (text || "").split(/\s+/);
+        for (let i = 1; i < parts.length; i++) {
+            const dig = parts[i].replace(/[^0-9]/g, "");
+            if (dig.length >= 5) return { id: dig, name: dig };
+        }
+        return null;
+    } catch (e) { return null; }
+}
+
+// Action run kore (custom command e) — return { ok, vars, msg }
+async function runCmdAction(action, chatId, tgt, groupConf, fromUser) {
+    const mention = `<a href="tg://user?id=${tgt.id}">${cleanName(tgt.name)}</a>`;
+    const vars = { mention: mention, name: cleanName(tgt.name), id: String(tgt.id), groupId: String(chatId), userId: String(fromUser.id) };
+    const act = String(action || "reply");
+    try {
+        if (act === "warn") {
+            const wOwner = await getFreshOwner(chatId, groupConf);
+            const n = (await getWarnCount(chatId, tgt.id)) + 1;
+            await setWarnCount(chatId, tgt.id, n, wOwner);
+            const limit = Math.max(2, Number(groupConf.warnLimit) || 5);
+            vars.count = n; vars.limit = limit;
+            let msg = `⚠️ ${mention} ওয়ার্ন <b>(${n}/${limit})</b>`;
+            if (n >= limit) {
+                const wa = groupConf.warnAction || "ban";
+                if (wa === "mute") {
+                    await groupBot.restrictChatMember(chatId, tgt.id, { permissions: { can_send_messages: false }, until_date: Math.floor(Date.now() / 1000) + 3600 }).catch(() => {});
+                    msg = `🔇 ${mention}-কে ১ ঘণ্টার জন্য মিউট করা হলো! (ওয়ার্ন: ${n}/${limit})`;
+                } else if (wa === "kick") {
+                    await groupBot.banChatMember(chatId, tgt.id).catch(() => {});
+                    await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
+                    msg = `👢 ${mention}-কে কিক করা হলো! (ওয়ার্ন: ${n}/${limit})`;
+                } else if (wa !== "warn") {
+                    await groupBot.banChatMember(chatId, tgt.id).catch(() => {});
+                    msg = `🚨 ${mention}-কে গ্রুপ থেকে ব্যান করা হলো! (ওয়ার্ন: ${n}/${limit})`;
+                }
+                await clearWarn(chatId, tgt.id);
+            }
+            return { ok: true, vars: vars, msg: msg };
+        }
+        if (act === "ban") {
+            await groupBot.banChatMember(chatId, tgt.id).catch(() => {});
+            return { ok: true, vars: vars, msg: `🔨 ${mention}-কে ব্যান করা হলো!` };
+        }
+        if (act === "kick") {
+            await groupBot.banChatMember(chatId, tgt.id).catch(() => {});
+            await groupBot.unbanChatMember(chatId, tgt.id).catch(() => {});
+            return { ok: true, vars: vars, msg: `👢 ${mention}-কে কিক করা হলো!` };
+        }
+        if (act === "mute") {
+            await groupBot.restrictChatMember(chatId, tgt.id, {
+                permissions: { can_send_messages: false },
+                until_date: Math.floor(Date.now() / 1000) + 3600
+            }).catch(() => {});
+            vars.duration = "১ ঘণ্টা";
+            return { ok: true, vars: vars, msg: `🔇 ${mention}-কে ১ ঘণ্টার জন্য মিউট করা হলো!` };
+        }
+        if (act === "unwarn") {
+            const cur = await getWarnCount(chatId, tgt.id);
+            const left = Math.max(0, cur - 1);
+            if (left <= 0) await clearWarn(chatId, tgt.id);
+            else await setWarnCount(chatId, tgt.id, left, await getFreshOwner(chatId, groupConf));
+            vars.count = left;
+            return { ok: true, vars: vars, msg: `↩️ ${mention}-এর ১টা ওয়ার্ন কমানো হলো — বাকি <b>${left}</b>` };
+        }
+        if (act === "resetwarn") {
+            await clearWarn(chatId, tgt.id);
+            return { ok: true, vars: vars, msg: `🗑️ ${mention}-এর সব ওয়ার্ন clear করা হলো!` };
+        }
+        return { ok: true, vars: vars, msg: "" };
+    } catch (e) {
+        return { ok: false, vars: vars, msg: "", error: String((e && e.message) || e) };
+    }
+}
+
 const CMD_REGISTRY = [
     // ── Group moderation (admin only) ──
     {
@@ -2613,6 +2738,32 @@ async function onGroupUpdate(msg, isEdit) {
                     trigCool.set(ck, Date.now());
                     if (trigCool.size > 4000) trigCool.clear();
 
+                    // ── CUSTOM COMMAND: phrase match → action (warn/ban/mute...) ──
+                    const trigAction = String(trig.action || "reply").toLowerCase();
+                    let actionVars = {
+                        mention: `<a href="tg://user?id=${userId}">${cleanName(currentName)}</a>`,
+                        name: cleanName(currentName), id: String(userId),
+                        groupId: String(chatId), userId: String(fromUser.id),
+                        text: cleanName(text).slice(0, 200), count: "", limit: "", duration: ""
+                    };
+                    let actionMsg = "";
+                    if (trigAction && trigAction !== "reply") {
+                        if (!isAdmin) {
+                            await groupBot.sendMessage(chatId, `🔒 <b>${cleanName(kw)}</b> — ei command shudhu <b>admin</b> use korte parbe.`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                            break;
+                        }
+                        const cTgt = await resolveCmdTarget(chatId, msg, text);
+                        if (!cTgt || !cTgt.id) {
+                            await groupBot.sendMessage(chatId, `💡 <b>${cleanName(kw)}</b> use korar jonno user ke <b>reply</b> koren ba <b>@mention</b> koren ba <b>ID</b> likhun.`, { parse_mode: "HTML", reply_to_message_id: msgId }).catch(() => {});
+                            break;
+                        }
+                        const actRes = await runCmdAction(trigAction, chatId, cTgt, groupConf, fromUser);
+                        if (actRes && actRes.ok) {
+                            actionVars = actRes.vars || actionVars;
+                            actionMsg = actRes.msg || "";
+                        }
+                    }
+
                     const built = buildTriggerMarkup(trig);
                     if (built.skipped.length > 0) {
                         console.error("[TRIGGER BTN SKIP] chat=" + chatId + " keyword=\"" + trig.keyword + "\" bad=" + JSON.stringify(built.skipped));
@@ -2624,7 +2775,12 @@ async function onGroupUpdate(msg, isEdit) {
                     };
                     if (built.markup) sendOpts.reply_markup = built.markup;
 
-                    groupBot.sendMessage(chatId, trig.reply, sendOpts).then((sent) => {
+                    // Reply text e {mention} {name} {count} etc. boshay
+                    let trigText = fillCmdText(String(trig.reply || ""), actionVars);
+                    if (!trigText && actionMsg) trigText = actionMsg;
+                    if (!trigText) trigText = "✅ done";
+
+                    groupBot.sendMessage(chatId, trigText, sendOpts).then((sent) => {
                         try {
                             const tdel = cfgNum(trig, "deleteSec", 0, 0, 300);
                             if (sent && sent.message_id && tdel > 0) autoDel(chatId, sent.message_id, tdel);
@@ -2633,8 +2789,8 @@ async function onGroupUpdate(msg, isEdit) {
                         console.error("[TRIGGER SEND ERR] chat=" + chatId + " keyword=\"" + trig.keyword + "\":", err.message, "| hint:", tlErrHint(err));
                         const retry = { reply_to_message_id: msgId, disable_web_page_preview: true };
                         if (built.markup) retry.reply_markup = built.markup;
-                        groupBot.sendMessage(chatId, trig.reply, retry).catch(() => {
-                            groupBot.sendMessage(chatId, trig.reply, { reply_to_message_id: msgId }).catch(() => {});
+                        groupBot.sendMessage(chatId, trigText, retry).catch(() => {
+                            groupBot.sendMessage(chatId, trigText, { reply_to_message_id: msgId }).catch(() => {});
                         });
                     });
                     break;

@@ -290,3 +290,16 @@ Bot age chupchap fail korto — ekhon nijei group e bole dey. Tao na bujhle nich
 - **Search box** diye command filter kora jay. Custom text per-group store hoy (`tg_groups.cmdTexts`).
 - **API:** `GET /api/tg/commands?chatId=` (list + current custom) · `POST /api/tg/cmd-text` (chatId + cmd + text save).
 - **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5**.
+
+## AH. Custom Command — nije Bangla phrase likhe bot ke kaaj korano (2026-10-22)
+- **Ei feature ta tumi chai: `/warn` command na likhe nijei Bangla phrase likhe bot ke kaaj korano.**
+    • **Phrase** likho (jemon `warn dewa uchit`, `ei lok amar bhalo lagche na`)
+    • **Action** choose koro — Reply only / Warn / Ban / Kick / Mute / 1ta warn kom / Sob warn clear
+    • **Reply** likho (jonom `ore warn daw`) — bot oi text-i bolbe
+- **Kivabe kaj kore:** Admin group e ei phrase likhe **user ke reply/@mention/ID** diye likhe (jemon `ei bot tumi ki mone koro oke warn dewa uchit` + user mention) → phrase match hoy → bot **sei user ke warn kore** → tarpor apnar likha reply pathay.
+- **Action shudhu admin use korte parbe** — member phrase likhle action chole na (bot notice dey). Reply-only command shudhu sob member er jonno kaj kore.
+- **Target:** reply / tap-mention / @username / numeric ID — chintei chole. Target chara phrase likhle bot bole dey "user ke reply koren ba @mention koren ba ID likhun".
+- **Reply e placeholder:** `{mention}` `{name}` `{id}` `{count}` `{limit}` `{duration}` `{groupId}` `{userId}` `{text}` — jemon `ore warn daw, {mention} ({count}/{limit})`.
+- **Kothay banabo:** Panel → **⚡ Commands & Replies** → upore **➕ Notun Custom Command banano** card. Niche **Apnar banano custom command (list)** — phir Edit/Delete. (Triggers tab eo notun **Action** dropdown add hoyeche.)
+- **Built-in command er reply edit:** same Commands section e protita built-in command card er **Default reply** edit kora jay → oi command er reply change hoy (age addTrigger/msg change hoyilo).
+- **Korte hobe:** GitHub push -> Render redeploy -> panel **Ctrl+F5**.
