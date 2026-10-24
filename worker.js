@@ -672,8 +672,9 @@ async function getGlobalWelcome() {
 }
 function buildWelcome(gw, name) {
     gw = gw || {};
-    const text = gw.welcomeMsg ? String(gw.welcomeMsg).replace(/\{name\}/g, name || "Member")
-        : `👋 <b>স্বাগতম ${name || "Member"}!</b>\n\n` +
+    const safeName = escH(cleanName(name || "Member"));
+    const text = gw.welcomeMsg ? String(gw.welcomeMsg).replace(/\{name\}/g, safeName)
+        : `👋 <b>স্বাগতম ${safeName}!</b>\n\n` +
           `আমাদের গ্রুপে আপনাকে স্বাগতম।\n\n` +
           `⚠️ <i>গ্রুপের নিয়ম মেনে চলুন, স্ক্যামার থেকে সতর্ক থাকুন।</i>`;
     const img = gw.welcomeImg || WELCOME_IMG;
@@ -687,19 +688,25 @@ function buildWelcome(gw, name) {
 async function resolveWelcome(chatId, gConf, name) {
     const mode = (gConf && gConf.welcomeMode) || "global";
     if (mode === "off") return null;
-    if (mode === "custom" && gConf && gConf.welcomeMsg && String(gConf.welcomeMsg).trim()) {
-        const gw = await getGlobalWelcome();
-        const text = String(gConf.welcomeMsg).replace(/\{name\}/g, name || "Member");
-        const img = gConf.welcomeImg || gw.welcomeImg || WELCOME_IMG;
+
+    const safeName = escH(cleanName(name || "Member"));
+    const gw = await getGlobalWelcome();
+
+    if (mode === "custom") {
+        const rawMsg = (gConf && gConf.welcomeMsg && String(gConf.welcomeMsg).trim())
+            ? String(gConf.welcomeMsg)
+            : (gw.welcomeMsg || "👋 <b>স্বাগতম {name}!</b>\n\nআমাদের গ্রুপে আপনাকে স্বাগতম।");
+        const text = rawMsg.replace(/\{name\}/g, safeName);
+        const img = (gConf && gConf.welcomeImg) || gw.welcomeImg || WELCOME_IMG;
         const links = (Array.isArray(gw.joinLinks) && gw.joinLinks.length) ? gw.joinLinks : [];
         const buttons = links.filter((b) => b && b.url).slice(0, 8).map((b) => ([
             { text: String(b.text || "Join").slice(0, 60), url: String(b.url) }
         ]));
         return { text, img, buttons, deleteSec: cfgNum(gConf, "welcomeDeleteSec", 10, 0, 300) };
     }
-    const gw = await getGlobalWelcome();
+
     if (gw.welcomeOn === false) return null;
-    const w = buildWelcome(gw, name);
+    const w = buildWelcome(gw, safeName);
     return { ...w, deleteSec: cfgNum(gConf, "welcomeDeleteSec", 10, 0, 300) };
 }
 
@@ -2663,15 +2670,21 @@ async function onGroupUpdate(msg, isEdit) {
                     trigCool.set(ck, Date.now());
                     if (trigCool.size > 4000) trigCool.clear();
 
+                    // Option: Delete user's message if configured by admin
+                    const shouldDelUser = Boolean(trig.deleteUserMsg || trig.hideCmd || trig.delUserMsg);
+                    if (shouldDelUser) {
+                        await delMsg(chatId, msgId);
+                    }
+
                     const built = buildTriggerMarkup(trig);
                     if (built.skipped.length > 0) {
                         console.error("[TRIGGER BTN SKIP] chat=" + chatId + " keyword=\"" + trig.keyword + "\" bad=" + JSON.stringify(built.skipped));
                     }
                     const sendOpts = {
-                        reply_to_message_id: msgId,
                         parse_mode: "HTML",
                         disable_web_page_preview: true
                     };
+                    if (!shouldDelUser) sendOpts.reply_to_message_id = msgId;
                     if (built.markup) sendOpts.reply_markup = built.markup;
 
                     // Reply text e {mention} {name} {count} etc. boshay
@@ -2685,10 +2698,11 @@ async function onGroupUpdate(msg, isEdit) {
                         } catch (e) {}
                     }).catch((err) => {
                         console.error("[TRIGGER SEND ERR] chat=" + chatId + " keyword=\"" + trig.keyword + "\":", err.message, "| hint:", tlErrHint(err));
-                        const retry = { reply_to_message_id: msgId, disable_web_page_preview: true };
+                        const retry = { disable_web_page_preview: true };
+                        if (!shouldDelUser) retry.reply_to_message_id = msgId;
                         if (built.markup) retry.reply_markup = built.markup;
                         groupBot.sendMessage(chatId, trigText, retry).catch(() => {
-                            groupBot.sendMessage(chatId, trigText, { reply_to_message_id: msgId }).catch(() => {});
+                            groupBot.sendMessage(chatId, trigText, shouldDelUser ? { disable_web_page_preview: true } : { reply_to_message_id: msgId }).catch(() => {});
                         });
                     });
                     break;
@@ -3544,10 +3558,18 @@ groupBot.on("message", async (msg) => { await onGroupUpdate(msg, false); });
 groupBot.on("edited_message", async (msg) => { await onGroupUpdate(msg, true); });
 
 // ---------------- 10. WELCOME ----------------
+let _cachedBotMe = null;
+async function getCachedBotMe() {
+    if (_cachedBotMe) return _cachedBotMe;
+    try { _cachedBotMe = await groupBot.getMe(); } catch (e) {}
+    return _cachedBotMe;
+}
+
 groupBot.on("new_chat_members", async (msg) => {
     try {
         const chatId = msg.chat.id.toString();
-        const newMembers = msg.new_chat_members || [];
+        const newMembers = msg.new_chat_members || (msg.new_chat_member ? [msg.new_chat_member] : (msg.new_chat_participant ? [msg.new_chat_participant] : []));
+        if (!newMembers || !newMembers.length) return;
 
         const oldMsgId = lastWelcomeMessages.get(chatId);
         if (oldMsgId) {
@@ -3563,27 +3585,37 @@ groupBot.on("new_chat_members", async (msg) => {
             } catch (e) { gConf = {}; }
         }
 
+        const me = await getCachedBotMe();
+
         for (const user of newMembers) {
             if (user.is_bot) continue;
             // bot nije join hole welcome na (my_chat_member greeting dey)
-            try {
-                const me = await groupBot.getMe().catch(() => null);
-                if (me && user.id === me.id) continue;
-            } catch (e) {}
+            if (me && user.id === me.id) continue;
+
             // join kora user er id collect (Send box er jonno)
             trackMember(chatId, String(user.id), user.first_name || "Member",
                 user.username ? `@${user.username}` : "None", (gConf && gConf.ownerUid) || "").catch(() => {});
-            const name = user.first_name || "Member";
+            const name = user.first_name || user.username || "Member";
             const w = await resolveWelcome(chatId, gConf, name);
             if (!w) continue;
 
             const photoOpts = { caption: w.text, parse_mode: "HTML" };
             if (w.buttons.length) photoOpts.reply_markup = { inline_keyboard: w.buttons };
-            let sentWelcome = await groupBot.sendPhoto(chatId, w.img, photoOpts).catch(async () => {
-                // photo URL dead hole text welcome
+
+            let sentWelcome = await groupBot.sendPhoto(chatId, w.img, photoOpts).catch(async (e1) => {
+                // photo URL dead ba network fail hole text HTML welcome
                 const topts = { parse_mode: "HTML" };
                 if (w.buttons.length) topts.reply_markup = { inline_keyboard: w.buttons };
-                return groupBot.sendMessage(chatId, w.text, topts).catch(() => null);
+                return groupBot.sendMessage(chatId, w.text, topts).catch(async (e2) => {
+                    // HTML entity parse fail hole plain text fallback (member name tags broken thakle)
+                    const plainOpts = { disable_web_page_preview: true };
+                    if (w.buttons.length) plainOpts.reply_markup = { inline_keyboard: w.buttons };
+                    return groupBot.sendMessage(chatId, stripHtml(w.text), plainOpts).catch((e3) => {
+                        console.error("[WELCOME SEND FAIL]:", chatId, e3.message || e3);
+                        hintNoRights(chatId, e3);
+                        return null;
+                    });
+                });
             });
 
             if (sentWelcome) {
@@ -3597,7 +3629,9 @@ groupBot.on("new_chat_members", async (msg) => {
                 autoDel(chatId, sentWelcome.message_id, w.deleteSec);
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error("[WELCOME HANDLER ERR]:", (e && e.message) || e);
+    }
 });
 
 // Giveaway Join বাটন হ্যান্ডলার
