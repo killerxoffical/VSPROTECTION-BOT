@@ -1030,7 +1030,7 @@ const DEFAULT_API_ID = 39447470;
 const DEFAULT_API_HASH = "eb7cac1c8ad9935d4b208dc0da076d8c";
 const TARGET_BOT = process.env.TARGET_BOT || "PlayQuestHelperBot";
 
-const USER_NOTIFY_BOT_TOKEN = process.env.USER_NOTIFY_BOT_TOKEN || "8906230491:AAEu4CX0T9Dz6YMLxeCNz6U-nbiQmiBiJ_s";
+const USER_NOTIFY_BOT_TOKEN = process.env.USER_NOTIFY_BOT_TOKEN || "8590481969:AAExJVORvmzlmWZK5xengC4vW8a3oO8P3G4";
 const ORDER_LOG_CHANNEL = process.env.ORDER_LOG_CHANNEL || "@ppmododderlog";
 
 // 409 Conflict প্রতিরোধে safe polling
