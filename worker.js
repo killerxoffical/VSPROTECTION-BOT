@@ -1,16 +1,36 @@
+javascript
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const multer = require("multer");
 const admin = require("firebase-admin");
 const TelegramBot = require("node-telegram-bot-api");
 const { TelegramClient, Api } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { NewMessage } = require("telegram/events");
 
-// gramjs inline Button (auto-reply নিচে বাটন দেখানোর জন্য) — robust import
+// ---------------- FIREBASE ADMIN INITIALIZATION ----------------
+let serviceAccount;
+try {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} catch (e) {
+    try {
+        serviceAccount = require("./serviceAccountKey.json");
+    } catch (err) {
+        console.warn("[FIREBASE] serviceAccountKey.json not found, waiting for env var");
+    }
+}
+
+if (!admin.apps.length && serviceAccount) {
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
+const db = admin.firestore();
+
+// ---------------- GRAMJS INLINE BUTTON HELPER ----------------
 let TgButton = null;
 try { TgButton = require("telegram").Button || null; } catch (e) {}
 if (!TgButton) { try { TgButton = require("telegram/tl/custom/button").Button; } catch (e) {} }
+
 function buildPrimeButtons() {
     try {
         if (!TgButton || typeof TgButton.url !== "function") return null;
@@ -32,7 +52,6 @@ app.get("/", (req, res) => res.status(200).send("PP MOD Master Engine Active!"))
 app.get("/ping", (req, res) => res.status(200).send("pong"));
 app.get("/health", (req, res) => res.status(200).json({ status: "ok", uptime: process.uptime() }));
 
-// Render Port Instant Listening
 app.listen(PORT, "0.0.0.0", () => console.log(`[HTTP] Server active on port ${PORT}`));
 
 // ---------------- APP GATEWAY: PENDING QUEUE & SWITCH APIS ----------------
@@ -130,12 +149,10 @@ function parseSmsBody(sender, body) {
     if (/nagad/i.test(sender) || /nagad/i.test(text)) method = "Nagad";
     else if (/rocket|16216/i.test(sender) || /rocket/i.test(text)) method = "Rocket";
 
-    // আধুনিক বিকাশ/নগদ TrxID পার্সিং
     let trxMatch = text.match(/(?:TrxID|TxnID|Txn|ID)[:\s]*([A-Za-z0-9]{8,12})/i) 
                 || text.match(/\b([A-Z0-9]{8,12})\b/);
     if (trxMatch) trxId = trxMatch[1].trim().toUpperCase();
 
-    // টাকা পার্সিং (15.00 এবং 15 দুটোই সঠিকভাবে গ্রহণ করবে)
     let amtMatch = text.match(/(?:Tk|Amount|received)[:\s]*([\d,]+(?:\.\d+)?)/i)
                 || text.match(/([\d,]+(?:\.\d+)?)\s*Tk/i);
     if (amtMatch) amount = Math.round(parseFloat(amtMatch[1].replace(/,/g, "")));
@@ -159,14 +176,12 @@ app.post("/api/p2p/payment-sent", async (req, res) => {
             return res.status(400).json({ ok: false, error: "Deal is not in processing state" });
         }
 
-        // Lock deal into payment_sent and stop timer
         await dealRef.update({
             status: "payment_sent",
             paymentSentAt: admin.firestore.FieldValue.serverTimestamp(),
             timerStopped: true
         });
 
-        // Notify Buyer via Telegram (Prime client or Notify Bot)
         const buyerTgUsername = (deal.buyerTg || "").replace("@", "").trim();
         const alertMsg = `🔔 <b>P2P Payment Notification!</b>\n\n` +
             `🤝 <b>Deal:</b> ${deal.title || "P2P Task"}\n` +
@@ -201,8 +216,7 @@ app.post("/api/p2p/payment-sent", async (req, res) => {
 });
 
 // ---------------- ADELL IMAGE CDN UPLOAD PROXY ----------------
-const multer = require("multer");
-const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
+const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ---------------- AUTO CREATE TELEGRAM SECRET GROUP ----------------
 app.post("/api/adell/create-tg-group", async (req, res) => {
@@ -215,16 +229,13 @@ app.post("/api/adell/create-tg-group", async (req, res) => {
         if (!snap.exists) return res.status(404).json({ ok: false, error: "Room not found" });
         const r = snap.data();
 
-        // If Telegram Group already created, return existing
         if (r.tgGroupLink) {
             return res.json({ ok: true, link: r.tgGroupLink });
         }
 
-        // Prime client ba worker diye group create kora
         let inviteLink = null;
         const groupTitle = `ADELL [${(r.title || "Trade").slice(0, 15)}]`;
 
-        // Use connected Primary Telegram Client to dynamically create Telegram Secret Group
         let primaryTgClient = null;
         if (primeClients && primeClients.size > 0) {
             primaryTgClient = primeClients.values().next().value.client;
@@ -238,7 +249,6 @@ app.post("/api/adell/create-tg-group", async (req, res) => {
 
         if (primaryTgClient) {
             try {
-                // কোনো বট ছাড়া সম্পূর্ণ নিরাপদ সুপারগ্রুপ তৈরি (Zero bot, 100% private)
                 const createRes = await primaryTgClient.invoke(
                     new Api.channels.CreateChannel({
                         title: groupTitle,
@@ -255,9 +265,7 @@ app.post("/api/adell/create-tg-group", async (req, res) => {
                         })
                     );
                     inviteLink = exportRes.link;
-                    console.log(`[ADELL TG GROUP] Created clean private supergroup (No Bot): ${inviteLink}`);
 
-                    // গ্রুপের ভেতর অফিশিয়াল নোটিশ পিন করা
                     try {
                         await primaryTgClient.sendMessage(channel, {
                             message: `🤝 <b>ADELL Private Trade Room</b>\n\n` +
@@ -282,10 +290,8 @@ app.post("/api/adell/create-tg-group", async (req, res) => {
             tgGroupCreatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        console.log(`[ADELL] Telegram Trade Group Ready for ${roomId}: ${inviteLink}`);
         return res.json({ ok: true, link: inviteLink });
     } catch (e) {
-        console.error("[ADELL TG GROUP ERR]:", e);
         return res.status(500).json({ ok: false, error: e.message });
     }
 });
@@ -297,7 +303,6 @@ app.post("/api/tg/upload-cdn-photo", upload.single("photo"), async (req, res) =>
         }
         const logChannel = process.env.ORDER_LOG_CHANNEL || "@ppmododderlog";
 
-        // Telegram Bot file upload via form buffer
         const sentMsg = await userNotifyBot.sendPhoto(logChannel, req.file.buffer, {
             caption: "🖼 <b>ADELL Trade Room Media</b>",
             parse_mode: "HTML"
@@ -313,10 +318,8 @@ app.post("/api/tg/upload-cdn-photo", upload.single("photo"), async (req, res) =>
         const largestPhoto = sentMsg.photo[sentMsg.photo.length - 1];
         const fileLink = await userNotifyBot.getFileLink(largestPhoto.file_id);
 
-        console.log(`[ADELL CDN] Successfully hosted image on Telegram: ${fileLink}`);
         return res.json({ ok: true, url: fileLink });
     } catch (e) {
-        console.error("[ADELL CDN ERR]:", e);
         return res.status(500).json({ ok: false, error: e.message || "Failed to host on Telegram" });
     }
 });
@@ -347,10 +350,8 @@ app.post("/api/adell/confirm", async (req, res) => {
             if (willBothConfirm) {
                 updates.status = "completed";
                 updates.completedAt = admin.firestore.FieldValue.serverTimestamp();
-                // 7 days auto-deletion retention
                 updates.expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
 
-                // Transfer PP Coins to Seller
                 const sRef = db.collection("users").doc(r.sellerUid);
                 const sSnap = await t.get(sRef);
                 const curCoins = sSnap.exists ? Number(sSnap.data().balance || 0) : 0;
@@ -361,7 +362,6 @@ app.post("/api/adell/confirm", async (req, res) => {
                     dealsCompleted: admin.firestore.FieldValue.increment(1)
                 });
 
-                // Increment dealsCompleted for Buyer
                 const bRef = db.collection("users").doc(r.buyerUid);
                 t.update(bRef, {
                     dealsCompleted: admin.firestore.FieldValue.increment(1)
@@ -396,7 +396,7 @@ app.post("/api/p2p/release", async (req, res) => {
             if (!d.sellerUid) throw new Error("No seller attached");
 
             sellerUid = d.sellerUid;
-            sellerPoints = Math.floor(Number(d.coins || 0) * 10); // 0% fee deducted (Full 100% payout)
+            sellerPoints = Math.floor(Number(d.coins || 0) * 10);
 
             const sRef = db.collection("users").doc(sellerUid);
             const sSnap = await t.get(sRef);
@@ -456,7 +456,6 @@ app.post("/api/gateway/sms", async (req, res) => {
             return res.json({ ok: true, matched: true, autoApproved: false, note: "Auto-deposit is OFF by Admin" });
         }
 
-        // Auto Gateway OFF থাকা অবস্থায় কোনো পেন্ডিং ভেরিফাই হবে না
         const autoDepStartTime = cfg.autoDepositTurnedOnAt ? cfg.autoDepositTurnedOnAt.toMillis() : 0;
         if (timestamp && autoDepStartTime && timestamp < autoDepStartTime) {
             return res.json({ ok: true, matched: true, autoApproved: false, note: "Ignored: SMS arrived before Auto Gateway was turned ON" });
@@ -501,7 +500,6 @@ app.post("/api/gateway/sms", async (req, res) => {
     }
 });
 
-// ইউজার সাইটে সাবমিট করলে ফোনের আসল SMS ভেরিফাই করার এন্ডপয়েন্ট
 app.post("/api/gateway/verify-deposit", async (req, res) => {
     const { depId, trxId, amount } = req.body;
     if (!depId || !trxId) return res.status(400).json({ ok: false, error: "Missing data" });
@@ -536,7 +534,6 @@ app.post("/api/gateway/verify-deposit", async (req, res) => {
             return res.json({ ok: false, error: "টাকা পাঠানোর ৫ মিনিট পার হয়ে গেছে! পুনরায় চেষ্টা করুন।" });
         }
 
-        // দশমিক থাকলে তা রাউন্ড করে তুলনা করা (যেমন 15.00 এবং 15 কে সমান ধরা)
         if (Math.round(Number(smsData.amount)) !== Math.round(Number(amount))) {
             await db.collection("deposits").doc(depId).update({
                 status: "rejected",
@@ -564,10 +561,11 @@ async function getBonusCfg() {
     } catch (e) {}
     return bonusCfgCache;
 }
+
 function rollBonus() {
-    // শুধুমাত্র 0.1 অথবা 0.2 রিওয়ার্ড
     return Math.random() < 0.5 ? 0.1 : 0.2;
 }
+
 function dhakaDay(offsetDays) {
     try {
         const t = Date.now() + (offsetDays || 0) * 86400000;
@@ -576,6 +574,7 @@ function dhakaDay(offsetDays) {
         return new Date(Date.now() + (offsetDays || 0) * 86400000).toISOString().slice(0, 10);
     }
 }
+
 app.post("/api/bonus/claim", async (req, res) => {
     try {
         const body = req.body || {};
@@ -618,6 +617,7 @@ app.post("/api/bonus/claim", async (req, res) => {
         return res.json({ ok: false, error: "Bonus failed, abar try korun" });
     }
 });
+
 app.get("/api/bonus/status", async (req, res) => {
     try {
         const uid = ((req.query || {}).uid || "").toString();
@@ -742,13 +742,14 @@ async function approveDepositSafe(depId, depData, verifiedAmount, coinRate) {
     } catch (e) {}
 }
 
-// ---------------- 1b. REFERRAL SYSTEM API ----------------
+// ---------------- REFERRAL SYSTEM API ----------------
 const REF_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 function makeRefCode() {
     let c = "";
     for (let i = 0; i < 6; i++) c += REF_ALPHABET[Math.floor(Math.random() * REF_ALPHABET.length)];
     return c;
 }
+
 app.post("/api/ref/join", async (req, res) => {
     const code = (req.body.code || "").toString().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
     const uid = (req.body.uid || "").toString().trim().slice(0, 64);
@@ -807,18 +808,6 @@ async function creditReferralBonus(buyerUid, orderId, gameName) {
     } catch (e) {}
 }
 
-// ---------------- 2. FIREBASE ADMIN ----------------
-let serviceAccount;
-try {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} catch (e) {
-    serviceAccount = require("./serviceAccountKey.json");
-}
-if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-}
-const db = admin.firestore();
-
 // ---------------- PENDING POINTS AUTO-MATURER ----------------
 setInterval(async () => {
     try {
@@ -865,7 +854,6 @@ setInterval(async () => {
 setInterval(async () => {
     try {
         const now = Date.now();
-        // 1. Open ads expired after 23h (No seller accepted)
         const openDeals = await db.collection("p2p_deals")
             .where("status", "==", "open")
             .limit(30)
@@ -909,7 +897,6 @@ setInterval(async () => {
             }
         }
 
-        // 2. Processing deals where time expired without seller pressing complete: LOCK FOR ADMIN REVIEW
         const procDeals = await db.collection("p2p_deals")
             .where("status", "==", "processing")
             .limit(30)
@@ -922,7 +909,6 @@ setInterval(async () => {
             else if (d.expiresAt && d.expiresAt.toMillis) linkExpMs = d.expiresAt.toMillis();
 
             if (linkExpMs && now >= linkExpMs && !d.timerStopped) {
-                // DO NOT delete or auto-refund — Lock the deal and send to Admin Desk
                 await db.collection("p2p_deals").doc(docSnap.id).update({
                     status: "locked_review",
                     timerStopped: true,
@@ -946,6 +932,7 @@ function tsMs(v) {
         return isNaN(n) ? 0 : n;
     } catch (e) { return 0; }
 }
+
 async function refundAndDelete(d, v, field, amount) {
     try {
         const uid = (v.uid || "").toString();
@@ -962,6 +949,7 @@ async function refundAndDelete(d, v, field, amount) {
         return true;
     } catch (e) { return false; }
 }
+
 async function runRetentionOnce() {
     try {
         const cutoff = Date.now() - RET_D;
@@ -1024,8 +1012,7 @@ async function runRetentionOnce() {
 setInterval(runRetentionOnce, 6 * 60 * 60 * 1000);
 setTimeout(runRetentionOnce, 2 * 60 * 1000);
 
-// ---------------- 3. CONFIGURATIONS ----------------
-// ✅ আপনার দেওয়া নতুন Telegram Credentials
+// ---------------- TELEGRAM CONFIGURATIONS ----------------
 const DEFAULT_API_ID = 39447470;
 const DEFAULT_API_HASH = "eb7cac1c8ad9935d4b208dc0da076d8c";
 const TARGET_BOT = process.env.TARGET_BOT || "PlayQuestHelperBot";
@@ -1033,7 +1020,6 @@ const TARGET_BOT = process.env.TARGET_BOT || "PlayQuestHelperBot";
 const USER_NOTIFY_BOT_TOKEN = process.env.USER_NOTIFY_BOT_TOKEN || "8906230491:AAEu4CX0T9Dz6YMLxeCNz6U-nbiQmiBiJ_s";
 const ORDER_LOG_CHANNEL = process.env.ORDER_LOG_CHANNEL || "@ppmododderlog";
 
-// 409 Conflict প্রতিরোধে safe polling
 const userNotifyBot = new TelegramBot(USER_NOTIFY_BOT_TOKEN, { polling: true });
 userNotifyBot.on("polling_error", () => {});
 
@@ -1042,16 +1028,14 @@ const PRIME_AUTO_REPLY_CAPTION = `👋 <b>হ্যালো!</b>\n\nএডম�
 
 let currentClient = null;
 let currentPhone = null;
-// Multi-Prime pool: phone -> { client, connectedAt }
 const primeClients = new Map();
-let primeClient = null; // compat: first connected prime
+let primeClient = null;
 let primePhone = null;
 
 const activeOrders = new Set();
 const autoReplyCooldown = new Map();
 const pendingAuthClients = new Map();
 
-// সঠিক BD Phone Formatter
 function formatBdPhone(raw) {
     let num = (raw || "").toString().replace(/[^0-9]/g, "");
     if (num.startsWith("880")) return "+" + num;
@@ -1060,7 +1044,7 @@ function formatBdPhone(raw) {
     return "+" + num;
 }
 
-// ---------------- 3b. USER BOT REFERRAL SYSTEM ----------------
+// ---------------- USER BOT REFERRAL SYSTEM ----------------
 const REQUIRED_CHANNELS = [
     { name: "📢 Main Channel", url: "https://t.me/googleplaypointhack", username: "@googleplaypointhack" },
     { name: "📋 All Order Log", url: "https://t.me/ppmododderlog", username: "@ppmododderlog" },
@@ -1099,8 +1083,6 @@ function getJoinKeyboard(userId, refId = null) {
     return { inline_keyboard: rows };
 }
 
-// ---------------- ADMIN SWIPE-TO-REPLY & COMMAND HANDLERS ----------------
-// Helper: User Dashboard Card Formatter
 function buildUserAdminCard(uid, uData) {
     const cleanBal = Math.round(((Number(uData.balance) || 0) + Number.EPSILON) * 100) / 100;
     const cleanPoints = Number(uData.playPoints) || 0;
@@ -1146,7 +1128,6 @@ userNotifyBot.on("message", async (msg) => {
         const replyTo = msg.reply_to_message;
         const chatId = msg.chat.id;
 
-        // অ্যাডমিন কাস্টম কয়েন যোগ/কাটার রিপ্লাই দিলে তা হ্যান্ডেল করা
         if (replyTo && replyTo.text) {
             const repText = replyTo.text;
             const uidMatch = repText.match(/UID:\s*([A-Za-z0-9_-]+)/i);
@@ -1189,7 +1170,6 @@ userNotifyBot.on("message", async (msg) => {
             }
         }
 
-        // /logon এবং /logoff কমান্ড
         if (text === "/logoff") {
             isAutoFakeLogEnabled = false;
             await db.collection("config").doc("app").set({ autoFakeLog: false }, { merge: true });
@@ -1201,7 +1181,6 @@ userNotifyBot.on("message", async (msg) => {
             return userNotifyBot.sendMessage(msg.chat.id, "✅ <b>চ্যানেলে ফেক অর্ডার লগ পাঠানো চালু (ON) করা হয়েছে!</b>", { parse_mode: "HTML" });
         }
 
-        // UID সার্চ বা সরাসরি UID দিলে ইউজার কার্ড ওপেন হবে
         const adminId = process.env.ADMIN_TG_ID || "7504616242";
         const isFromAdmin = msg.chat.id.toString() === adminId || (msg.from && msg.from.id.toString() === adminId);
 
@@ -1321,7 +1300,6 @@ userNotifyBot.on("callback_query", async (query) => {
         const userId = query.from.id.toString();
         const data = query.data || "";
 
-        // Admin User Management Button Handlers
         if (data.startsWith("u_toggle_ban:")) {
             const targetUid = data.replace("u_toggle_ban:", "").trim();
             const uRef = db.collection("users").doc(targetUid);
@@ -1533,7 +1511,7 @@ userNotifyBot.on("callback_query", async (query) => {
     } catch (e) {}
 });
 
-// ---------------- 6. MULTI-PRIME AUTO-RESPONDER (many accounts, same time) ----------------
+// ---------------- 6. MULTI-PRIME AUTO-RESPONDER ----------------
 function attachPrimeHandler(client, label) {
     client.addEventHandler(async (event) => {
         try {
@@ -1569,7 +1547,6 @@ async function initPrimeAutoResponder() {
     try {
         const snap = await db.collection("tg_accounts").where("isPrime", "==", true).get();
         if (snap.empty) {
-            // সব prime off হলে পুরনো connection বন্ধ করো
             for (const [ph, rec] of primeClients) {
                 try { await rec.client.disconnect(); } catch (e) {}
             }
@@ -1578,23 +1555,20 @@ async function initPrimeAutoResponder() {
             primePhone = null;
             return;
         }
-        const wanted = new Map(); // phone -> { id, session }
+        const wanted = new Map();
         snap.forEach(d => {
             const v = d.data() || {};
             const phone = v.phone || d.id;
             if (v.session) wanted.set(phone, { id: d.id, session: v.session, phone });
         });
 
-        // আর prime নেই এমন client disconnect করো
         for (const [ph, rec] of primeClients) {
             if (!wanted.has(ph)) {
                 try { await rec.client.disconnect(); } catch (e) {}
                 primeClients.delete(ph);
-                console.log(`[PRIME] Disconnected removed prime: ${ph}`);
             }
         }
 
-        // নতুন prime connect করো (already connected skip)
         for (const [phone, info] of wanted) {
             if (primeClients.has(phone)) continue;
             try {
@@ -1602,13 +1576,9 @@ async function initPrimeAutoResponder() {
                 await client.connect();
                 attachPrimeHandler(client, phone);
                 primeClients.set(phone, { client, connectedAt: Date.now(), docId: info.id });
-                console.log(`[PRIME] Multi-prime connected: ${phone} (${primeClients.size} active)`);
-            } catch (e) {
-                console.warn(`[PRIME] Connect failed ${phone}:`, (e && e.message) || e);
-            }
+            } catch (e) {}
         }
 
-        // compat: প্রথমটাকে primeClient রাখো (পুরনো কোড ভাঙবে না)
         const first = primeClients.keys().next();
         if (!first.done) {
             primePhone = first.value;
@@ -1617,13 +1587,11 @@ async function initPrimeAutoResponder() {
             primeClient = null;
             primePhone = null;
         }
-        if (wanted.size) console.log(`[PRIME] Pool status: ${primeClients.size}/${wanted.size} online`);
     } catch (e) {}
 }
 
 async function primeCooldownClaim(senderId, primeLabel) {
-    // Multi-prime: ২৪ ঘণ্টায় (১ দিনে) মাত্র ১ বার অটো-রিপ্লাই যাবে
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 24 Hours = 1 Day
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
     const key = primeLabel ? (primeLabel + ':' + senderId) : senderId;
     try {
         const ref = db.collection("tg_autoreply").doc(key);
@@ -1640,7 +1608,6 @@ async function primeCooldownClaim(senderId, primeLabel) {
     }
 }
 
-// Multi-prime live status (TelegramWorker থেকে দেখা যাবে)
 app.get("/api/tg/prime-status", async (req, res) => {
     try {
         const snap = await db.collection("tg_accounts").where("isPrime", "==", true).get();
@@ -1653,19 +1620,16 @@ app.get("/api/tg/prime-status", async (req, res) => {
     }
 });
 
-// ---------------- 7. OFFICIAL WEB-LIKE SESSION GENERATOR ENGINE ----------------
+// ---------------- 7. OFFICIAL SESSION GENERATOR ENGINE ----------------
 app.post("/api/tg/send-otp", async (req, res) => {
     const rawInput = req.body.phone || "";
     const phone = formatBdPhone(rawInput);
-
-    console.log(`[SESSION GEN] Requesting Telegram Code for: ${phone}`);
 
     if (!phone || phone.length < 13) {
         return res.status(400).json({ ok: false, error: "সঠিক মোবাইল নম্বর দিন (যেমন: 017XXXXXXXX)" });
     }
 
     try {
-        // telegram.tools সাইটটির মতো অফিসিয়াল কনফিগারেশন যাতে কোড মিস না হয়
         const client = new TelegramClient(new StringSession(""), DEFAULT_API_ID, DEFAULT_API_HASH, {
             connectionRetries: 5,
             useWSS: false,
@@ -1689,10 +1653,8 @@ app.post("/api/tg/send-otp", async (req, res) => {
             createdAt: Date.now()
         });
 
-        console.log(`[SESSION GEN] Code Sent Successfully to: ${phone}`);
         return res.json({ ok: true, message: "টেলিগ্রামে লগইন কোড পাঠানো হয়েছে!", phone });
     } catch (err) {
-        console.error(`[SESSION GEN ERR]:`, err);
         return res.status(500).json({ ok: false, error: err.errorMessage || err.message || "Failed to send code" });
     }
 });
@@ -1755,8 +1717,6 @@ app.post("/api/tg/verify-otp", async (req, res) => {
         }
 
         const sessionString = item.client.session.save();
-        console.log(`[SESSION CREATED] Generated Session for ${phone}`);
-
         const docId = phone.replace('+', '');
         await db.collection("tg_accounts").doc(docId).set({
             phone,
@@ -1830,7 +1790,6 @@ app.post("/api/tg/check-balance", async (req, res) => {
     }
 });
 
-// ---------------- 8b. MASS PROMO & DAILY CLAIM ----------------
 async function clickInlineButton(message, textPattern) {
     if (!message || !message.replyMarkup || !message.replyMarkup.rows) return false;
     for (const row of message.replyMarkup.rows) {
@@ -1866,7 +1825,6 @@ app.post("/api/tg/claim-daily-all", async (req, res) => {
                 const targetMsg = (msgs && msgs.length > 0) ? (msgs.find(m => !m.out) || msgs[0]) : null;
 
                 if (targetMsg) {
-                    // বটের বাটনে Claim, Daily Streak, Claim Today ইত্যাদির সাপোর্ট
                     let clicked = await clickInlineButton(targetMsg, "Claim Today");
                     if (!clicked) clicked = await clickInlineButton(targetMsg, "Claim");
                     if (!clicked) clicked = await clickInlineButton(targetMsg, "Daily");
@@ -1913,7 +1871,7 @@ app.post("/api/tg/redeem-code-all", async (req, res) => {
                 await temp.sendMessage(TARGET_BOT, { message: "🎁 Rewards Hub" });
                 await new Promise((r) => setTimeout(r, 2000));
                 const msgs = await temp.getMessages(TARGET_BOT, { limit: 1 });
-                if (msgs && msgs.length > 0) {
+                if (msgs && ms0 && msgs.length > 0) {
                     await clickInlineButton(msgs[0], "Redeem Promo");
                     await new Promise((r) => setTimeout(r, 2000));
                     await temp.sendMessage(TARGET_BOT, { message: code });
@@ -1932,13 +1890,14 @@ app.post("/api/tg/redeem-code-all", async (req, res) => {
     }
 });
 
-// ---------------- 10. USER NOTIFY HELPER (@Ppmod_bot) ----------------
+// ---------------- 10. USER NOTIFY HELPER ----------------
 function maskGmail(email) {
     const e = (email || "").toString().trim();
     const at = e.lastIndexOf("@");
     if (at <= 1) return e ? "++++++" : "—";
     return "++++++" + e.slice(at - 3, at) + e.slice(at);
 }
+
 async function sendOrderLog(text) {
     if (!text) return;
     try {
@@ -1952,7 +1911,6 @@ async function sendOrderLog(text) {
 
 let isAutoFakeLogEnabled = true;
 
-// ডাটাবেজ থেকে অটো-লগের অবস্থা চেক
 (async () => {
     try {
         const cSnap = await db.collection("config").doc("app").get();
@@ -2197,7 +2155,6 @@ async function refundOrder(orderId, uid, reason, userTgId = null) {
                 `🪙 <b>রিফান্ড:</b> ৩টি PP Coins ওয়ালেটে ফেরত দেওয়া হয়েছে।`
             );
         }
-        // ক্যানসেল বা রিফান্ডে চ্যানেলে আর কোনো লগ পাঠানো হবে না (Only completed logs allowed)
     } catch (e) {}
 }
 
@@ -2226,8 +2183,6 @@ async function processOrder(orderId, orderData) {
         await new Promise((r) => setTimeout(r, 1200));
         await tg.sendMessage(TARGET_BOT, { message: "🚀 Start Process" });
 
-        // পেন্ডিং অবস্থায় চ্যানেলে লগ পাঠানো বন্ধ করা হয়েছে (Only completed logs allowed)
-
         let found = await waitForCondition((m) => m.message && (m.message.includes("Available Chests") || m.message.includes("Select the desired chest") || m.message.includes("Chests")), 25000);
         if (!found) {
             await tg.sendMessage(TARGET_BOT, { message: "🚀 Start Process" });
@@ -2248,7 +2203,6 @@ async function processOrder(orderId, orderData) {
             await new Promise((r) => setTimeout(r, 2000));
         }
 
-        // বটের আপডেট অনুযায়ী এক স্পেস দিয়ে ফরম্যাট: email password
         const credText = `${orderData.accEmail.trim()} ${orderData.accPass.trim()}`;
         console.log(`[BOT SEND] Sending credentials for Order ${orderId}: ${maskGmail(orderData.accEmail)}`);
         
@@ -2377,6 +2331,22 @@ async function processOrder(orderId, orderData) {
         await refundOrder(orderId, orderData.uid, err.message || "সার্ভার এরর", orderData.userTgId);
     } finally {
         activeOrders.delete(orderId);
+    }
+}
+
+// ---------------- 12. HELPER CRON FOR DAILY SINGLE ----------------
+async function claimDailySingle(session) {
+    let temp = null;
+    try {
+        temp = new TelegramClient(new StringSession(session), DEFAULT_API_ID, DEFAULT_API_HASH, { connectionRetries: 3 });
+        await temp.connect();
+        await temp.sendMessage(TARGET_BOT, { message: "🎁 Rewards Hub" });
+        await new Promise((r) => setTimeout(r, 2000));
+    } catch (e) {
+    } finally {
+        if (temp) {
+            try { await temp.disconnect(); } catch (e) {}
+        }
     }
 }
 
