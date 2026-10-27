@@ -1,17 +1,21 @@
 {
   "name": "vs-protection-bot",
   "version": "1.0.0",
-  "description": "VS Protection Bot — standalone Telegram group/channel guardian (vsprotection1)",
+  "description": "VS Protection Bot — standalone Telegram group/channel guardian",
   "main": "worker.js",
   "scripts": {
     "start": "node worker.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "cors": "^2.8.5",
-    "telegram": "^2.26.22",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "firebase-admin": "^12.1.0",
-    "node-telegram-bot-api": "^0.66.0"
+    "multer": "^1.4.5-lts.1",
+    "node-telegram-bot-api": "^0.66.0",
+    "telegram": "^2.26.22"
   }
 }
